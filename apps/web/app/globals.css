@@ -15,3 +15,42 @@ body {
     @apply rounded-card border border-slate-200 bg-white;
   }
 }
+
+/* 报告 PDF 导出走浏览器打印：只让 A4 纸样上纸，其余 UI 全部隐藏 */
+@media print {
+  @page {
+    size: A4;
+    margin: 12mm;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .no-print,
+  header,
+  nav,
+  aside {
+    display: none !important;
+  }
+
+  .print-sheet {
+    width: auto !important;
+    max-width: none !important;
+    transform: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  .print-sheet h2 {
+    /* 章节标题不要落在页底 */
+    break-after: avoid;
+  }
+
+  .print-sheet table,
+  .print-sheet ol,
+  .print-sheet ul {
+    break-inside: avoid;
+  }
+}

@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { api, queryKeys, type Report } from '@/lib/api'
 import { useGenerateReport } from '@/lib/mutations'
+import { exportDocx, exportMarkdown, exportPdf } from '@/lib/export-report'
 
 /** 极简 Markdown 渲染器：标题 / 表格 / 列表 / 段落。报告只用到这几种。 */
 function renderMarkdown(md: string): React.ReactNode[] {
@@ -128,19 +129,9 @@ export function ReportClient({
     )
   }
 
-  const download = () => {
-    const blob = new Blob([data.markdown], { type: 'text/markdown;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `${data.title}-${data.version}.md`
-    a.click()
-    URL.revokeObjectURL(url)
-  }
-
   return (
     <div className="flex gap-4">
-      <aside className="w-[240px] shrink-0">
+      <aside className="no-print w-[240px] shrink-0">
         <SectionCard title="报告目录" bodyClassName="p-2">
           <ul className="space-y-0.5">
             {data.toc.map((t) => (
@@ -167,7 +158,7 @@ export function ReportClient({
       </aside>
 
       <section className="min-w-0 flex-1">
-        <div className="mb-3 flex items-center gap-2 rounded-card border border-slate-200 bg-white px-3 py-2">
+        <div className="no-print mb-3 flex items-center gap-2 rounded-card border border-slate-200 bg-white px-3 py-2">
           <div className="flex gap-1 rounded-lg bg-slate-100 p-0.5">
             {(
               [
@@ -218,7 +209,7 @@ export function ReportClient({
           </button>
           <button
             type="button"
-            onClick={download}
+            onClick={() => exportMarkdown(data)}
             className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600"
           >
             下载 Markdown
@@ -226,10 +217,10 @@ export function ReportClient({
           {note && <span className="text-[11px] text-slate-500">{note}</span>}
         </div>
 
-        <div className="overflow-auto rounded-card border border-slate-200 bg-slate-100 p-6">
+        <div className="overflow-auto rounded-card border border-slate-200 bg-slate-100 p-6 print:border-0 print:bg-white print:p-0">
           {view === 'page' ? (
             <article
-              className="mx-auto origin-top bg-white p-10 shadow-sm"
+              className="print-sheet mx-auto origin-top bg-white p-10 shadow-sm"
               style={{ width: 794, transform: `scale(${zoom / 100})` }}
             >
               <div className="mb-4 border-b border-slate-200 pb-3">
@@ -282,7 +273,7 @@ export function ReportClient({
         </div>
       </section>
 
-      <aside className="w-[300px] shrink-0 space-y-3">
+      <aside className="no-print w-[300px] shrink-0 space-y-3">
         <SectionCard title="报告设置" bodyClassName="p-3">
           <div className="space-y-2 text-[11px]">
             <Field label="报告标题" value={data.title} />
@@ -297,7 +288,7 @@ export function ReportClient({
             <li>
               <button
                 type="button"
-                onClick={download}
+                onClick={() => exportMarkdown(data)}
                 className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[11px] hover:bg-slate-50"
               >
                 <span className="flex h-7 w-7 items-center justify-center rounded bg-slate-100 text-slate-600">
@@ -310,19 +301,38 @@ export function ReportClient({
                 <span className="text-brand">→</span>
               </button>
             </li>
-            {['PDF', 'DOCX'].map((f) => (
-              <li key={f}>
-                <div className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[11px] opacity-50">
-                  <span className="flex h-7 w-7 items-center justify-center rounded bg-slate-100 text-slate-500">
-                    {f === 'PDF' ? 'PDF' : 'W'}
-                  </span>
-                  <span className="flex-1">
-                    <span className="block font-medium text-slate-600">导出 {f}</span>
-                    <span className="block text-slate-400">即将支持</span>
-                  </span>
-                </div>
-              </li>
-            ))}
+            <li>
+              <button
+                type="button"
+                onClick={exportPdf}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[11px] hover:bg-slate-50"
+              >
+                <span className="flex h-7 w-7 items-center justify-center rounded bg-red-50 text-red-600">
+                  PDF
+                </span>
+                <span className="flex-1">
+                  <span className="block font-medium text-slate-700">导出 PDF</span>
+                  <span className="block text-slate-400">调用浏览器打印，可选纸张与页边距</span>
+                </span>
+                <span className="text-brand">→</span>
+              </button>
+            </li>
+            <li>
+              <button
+                type="button"
+                onClick={() => exportDocx(data)}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[11px] hover:bg-slate-50"
+              >
+                <span className="flex h-7 w-7 items-center justify-center rounded bg-blue-50 text-blue-600">
+                  W
+                </span>
+                <span className="flex-1">
+                  <span className="block font-medium text-slate-700">导出 Word</span>
+                  <span className="block text-slate-400">生成 .doc，Word / WPS / Pages 可打开</span>
+                </span>
+                <span className="text-brand">→</span>
+              </button>
+            </li>
           </ul>
         </SectionCard>
 

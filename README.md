@@ -50,6 +50,13 @@ Railway Postgres 只有内网域名，本机连不上。
 
 | `POST /api/v1/ai/design-review` | 规则引擎 + AI 设计审查 |
 | `POST /api/v1/ai/chat` | SSE 流式对话 |
+| `POST /api/v1/ai/analyze-capture` | 波形诊断，落 AiDiagnosis |
+| `POST /api/v1/ai/analyze-photo` | 视觉检测 |
+| `POST /api/v1/ai/measure-guide` | 测量方案 |
+| `POST /api/v1/projects/:id/kicad/upload` | 上传 KiCad zip 并解析 |
+| `GET /api/v1/projects/:id/kicad/status` | 解析状态与 parseLog |
+| `GET /api/v1/parts/search` `?q=` | 器件知识检索（pgvector → 关键词降级） |
+| 写操作 | 照片上传 / 标注 CRUD / 保存捕获 / 步骤流转 / 报告生成 |
 
 响应全部经 `@app/contracts` 的 Zod schema 校验后才返回。
 
@@ -148,6 +155,8 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | P6 | 调试计划页 | ✅ |
 | P7 | 测试报告页 | ✅ |
 | P8 | 部署上线 + 冒烟验收 | ✅ |
+| — | 真实 LLM（Gemini/Claude/DeepSeek）+ 评测套件 | ✅ |
+| — | 前端写操作 / KiCad zip 上传 / PDF·DOCX 导出 / pgvector | ✅ |
 
 ## 部署（已上线）
 
