@@ -481,6 +481,8 @@ export const VIOLATIONS: V[] = [
 export const CAPTURES = [
   {
     scenario: 'normal',
+    no: 5,
+    minutesAgo: 21,
     label: '正常：已补 Vref、R2 未贴',
     driveVpp: 0.4,
     ch1: { vpp: 0.4, vrms: 0.1414, freqHz: 1000.2, offsetV: 0.0021, vmax: 2.7, vmin: 2.3, thdnPct: 0.28 },
@@ -492,7 +494,9 @@ export const CAPTURES = [
   },
   {
     scenario: 'gain_error',
-    label: '波形 #8：R2 桥接，增益减半',
+    no: 8,
+    minutesAgo: 0,
+    label: 'R2 桥接，增益减半',
     driveVpp: 0.4,
     ch1: { vpp: 0.4, vrms: 0.1414, freqHz: 1000.2, offsetV: 0.0062, vmax: 2.7, vmin: 2.3, thdnPct: 0.32 },
     ch2: { vpp: 2.002, vrms: 0.7078, freqHz: 1000.2, offsetV: -0.0021, vmax: 3.5, vmin: 1.5, thdnPct: 0.35 },
@@ -503,6 +507,8 @@ export const CAPTURES = [
   },
   {
     scenario: 'clipping',
+    no: 6,
+    minutesAgo: 14,
     label: '削顶：输入 1.000Vpp 超出摆幅',
     driveVpp: 1.0,
     ch1: { vpp: 1.0, vrms: 0.3536, freqHz: 1000.2, offsetV: 0.0035, vmax: 3.0, vmin: 2.0, thdnPct: 0.31 },
@@ -514,6 +520,8 @@ export const CAPTURES = [
   },
   {
     scenario: 'noisy',
+    no: 7,
+    minutesAgo: 7,
     label: '噪声：去耦与地回路劣化',
     driveVpp: 0.4,
     ch1: { vpp: 0.4, vrms: 0.1418, freqHz: 1000.2, offsetV: 0.0029, vmax: 2.71, vmin: 2.29, thdnPct: 0.42 },
@@ -525,6 +533,8 @@ export const CAPTURES = [
   },
   {
     scenario: 'no_response',
+    no: 4,
+    minutesAgo: 28,
     label: '无响应：U1.3 接 GND，缺 Vref 偏置',
     driveVpp: 0.4,
     ch1: { vpp: 0.4, vrms: 0.1414, freqHz: 1000.2, offsetV: 0.0018, vmax: 0.2, vmin: -0.2, thdnPct: 0.3 },
@@ -537,6 +547,38 @@ export const CAPTURES = [
 ] as const
 
 export const DEFAULT_SCENARIO = 'gain_error'
+
+/**
+ * 三条早期捕获，让测量总数达到文档里的 8（docs/03 统计卡「最近测量 8」、
+ * docs/02 报告统计「8 测量」），且默认展示的 gain_error 正好是最新的 #8。
+ * 它们不属于任何 scenario，切换场景时不参与。
+ */
+export const EARLY_CAPTURES = [
+  {
+    no: 1,
+    minutesAgo: 63,
+    kind: 'DMM' as const,
+    label: '上电检查：+5V 与 3V3 直流电平',
+    net: '+5V',
+    measurements: { dc: { '+5V': 5.02, '3V3': 3.29 }, note: '对应调试计划步骤 1.1 与 1.2' },
+  },
+  {
+    no: 2,
+    minutesAgo: 51,
+    kind: 'POWER' as const,
+    label: '电源纹波：U1.8 处 +5V',
+    net: '+5V',
+    measurements: { ripplemVpp: 12.4, bandwidthHz: 20_000_000, note: '对应调试计划步骤 1.5' },
+  },
+  {
+    no: 3,
+    minutesAgo: 38,
+    kind: 'LOGIC' as const,
+    label: 'I2C 总线活动：SDA/SCL',
+    net: 'SCL',
+    measurements: { sclKHz: 100, ackAddress: '0x60', riseTimeNs: 260, note: '对应调试计划第 5 组' },
+  },
+]
 
 /** 5 组 22 步。第 1 组按单电源改写（docs/05 §16.2）。 */
 export const PLAN_GROUPS = [

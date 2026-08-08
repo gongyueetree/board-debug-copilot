@@ -134,7 +134,12 @@ export const CaptureSummarySchema = z.object({
   scenario: ScenarioSchema.nullable(),
   netName: z.string().nullable(),
   debugStepId: z.string().nullable(),
-  measurements: MeasurementsSchema,
+  /**
+   * 双通道时域测量，只有 OSCILLOSCOPE 有；
+   * DMM / POWER / LOGIC 的测量结构完全不同，放在 rawMeasurements 里。
+   */
+  measurements: MeasurementsSchema.nullable(),
+  rawMeasurements: z.unknown(),
   hardwareSetup: z.unknown(),
   createdAt: z.string(),
 })
@@ -208,6 +213,24 @@ export const DebugPlanSchema = z.object({
   ),
 })
 export type DebugPlan = z.infer<typeof DebugPlanSchema>
+
+// ---------- Activity（总览页调试记录时间线）----------
+
+export const ActivityItemSchema = z.object({
+  id: z.string(),
+  kind: z.enum(['capture', 'step', 'diagnosis']),
+  title: z.string(),
+  detail: z.string(),
+  /** 状态 pill 文案，如「当前」「已保存」「已采纳」 */
+  status: z.string(),
+  tone: z.enum(['brand', 'green', 'slate']),
+  timestamp: z.string(),
+  /** 点击跳转目标，前端据此拼路由 */
+  link: z
+    .object({ page: z.enum(['bench', 'plan', 'design', 'photos']), ref: z.string().optional() })
+    .nullable(),
+})
+export type ActivityItem = z.infer<typeof ActivityItemSchema>
 
 // ---------- Photos ----------
 

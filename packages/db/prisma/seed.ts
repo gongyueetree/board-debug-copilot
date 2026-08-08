@@ -10,6 +10,7 @@ import {
   COMPONENTS,
   DEFAULT_SCENARIO,
   DIAGNOSIS,
+  EARLY_CAPTURES,
   NETS,
   PHOTO_ID,
   PLAN_GROUPS,
@@ -181,16 +182,34 @@ async function main() {
   }
   console.log(`  debugSteps: ${PLAN_GROUPS.length} 组 / ${stepCount} 步`)
 
-  // ---- Captures（五场景）----
+  // ---- Captures（3 条早期 + 5 个场景 = 8 条）----
   const vout = netIdByName.get('VOUT_AMP') ?? null
+  const now = Date.now()
+  const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000)
+
+  for (const e of EARLY_CAPTURES) {
+    await prisma.capture.create({
+      data: {
+        projectId: project.id,
+        netId: netIdByName.get(e.net) ?? null,
+        kind: e.kind,
+        label: `#${e.no} ${e.label}`,
+        createdAt: at(e.minutesAgo),
+        hardwareSetupJson: J({ instrument: 'ADALM2000', mode: e.kind }),
+        measurementsJson: J(e.measurements),
+      },
+    })
+  }
+
   let defaultCaptureId = ''
-  for (const [i, c] of CAPTURES.entries()) {
+  for (const c of CAPTURES) {
     const cap = await prisma.capture.create({
       data: {
         projectId: project.id,
         netId: vout,
         kind: 'OSCILLOSCOPE',
-        label: `#${i + 4} ${c.label}`,
+        label: `#${c.no} ${c.label}`,
+        createdAt: at(c.minutesAgo),
         // 步骤 3.1 是本次调试的关键证据，把默认场景挂到它下面
         debugStepId: c.scenario === DEFAULT_SCENARIO ? (stepIdByTitle.get('3.1') ?? null) : null,
         hardwareSetupJson: J({
@@ -223,7 +242,9 @@ async function main() {
     })
     if (c.scenario === DEFAULT_SCENARIO) defaultCaptureId = cap.id
   }
-  console.log(`  captures: ${CAPTURES.length}（默认 ${DEFAULT_SCENARIO}）`)
+  console.log(
+    `  captures: ${EARLY_CAPTURES.length + CAPTURES.length}（${CAPTURES.length} 个场景，默认 ${DEFAULT_SCENARIO} = #8）`,
+  )
 
   // ---- AiDiagnosis（captureId 唯一，见 docs/05 §7.3）----
   await prisma.aiDiagnosis.create({

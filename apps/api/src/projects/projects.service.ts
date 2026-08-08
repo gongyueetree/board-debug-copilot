@@ -1,5 +1,7 @@
 import { Injectable, NotFoundException } from '@nestjs/common'
 import type {
+  ActivityItem,
+  AiDiagnosis as AiDiagnosisDto,
   BoardPhoto,
   CaptureSummary,
   DebugPlan,
@@ -21,6 +23,9 @@ const iso = (d: Date) => d.toISOString()
 /** 视觉发现的 certainty 由置信度推导（docs/05 §8.3：<0.6 不得标 CONFIRMED） */
 const certaintyOf = (confidence: number, severity: string): 'CONFIRMED' | 'SUSPECTED' =>
   confidence >= 0.95 && severity === '正常' ? 'CONFIRMED' : 'SUSPECTED'
+
+/** 默认展示的场景，与 seed 保持一致（docs/05 §11.1） */
+const DEFAULT_SCENARIO = 'gain_error'
 
 @Injectable()
 export class ProjectsService {
@@ -207,7 +212,8 @@ export class ProjectsService {
       scenario: (asJson(c.hardwareSetupJson).scenario as Scenario | undefined) ?? null,
       netName: c.net?.name ?? null,
       debugStepId: c.debugStepId,
-      measurements: c.measurementsJson as never,
+      measurements: c.kind === 'OSCILLOSCOPE' ? (c.measurementsJson as never) : null,
+      rawMeasurements: c.measurementsJson,
       hardwareSetup: c.hardwareSetupJson,
       createdAt: iso(c.createdAt),
     }))
@@ -256,6 +262,76 @@ export class ProjectsService {
     }
   }
 
+  /**
+   * 调试记录时间线（docs/03 页面 1）。
+   * 全部由已有数据派生 —— 捕获、已完成步骤、AI 诊断，不另造时间线表。
+   */
+  async activity(id: string): Promise<ActivityItem[]> {
+    await this.assertProject(id)
+
+    const [captures, steps, diagnoses] = await Promise.all([
+      this.prisma.capture.findMany({ where: { projectId: id }, orderBy: { createdAt: 'desc' } }),
+      this.prisma.debugStep.findMany({
+        where: { projectId: id, parentId: { not: null }, status: 'COMPLETED' },
+        orderBy: { updatedAt: 'desc' },
+        include: { parent: { select: { order: true, title: true } } },
+      }),
+      this.prisma.aiDiagnosis.findMany({ where: { projectId: id }, orderBy: { createdAt: 'desc' } }),
+    ])
+
+    const items: ActivityItem[] = []
+
+    for (const c of captures) {
+      const m = asJson(c.measurementsJson)
+      const ch1 = asJson(m.ch1)
+      const ch2 = asJson(m.ch2)
+      const scenario = asJson(c.hardwareSetupJson).scenario as string | undefined
+      items.push({
+        id: `capture-${c.id}`,
+        kind: 'capture',
+        title: `捕获波形 ${c.label ?? ''}`.trim(),
+        detail: `CH1 ${Number(ch1.vpp ?? 0).toFixed(3)} Vpp，CH2 ${Number(ch2.vpp ?? 0).toFixed(3)} Vpp，Gain ${Number(m.gain ?? 0).toFixed(2)} V/V`,
+        status: scenario === DEFAULT_SCENARIO ? '当前' : '已保存',
+        tone: scenario === DEFAULT_SCENARIO ? 'brand' : 'slate',
+        timestamp: iso(c.createdAt),
+        link: { page: 'bench', ref: c.id },
+      })
+    }
+
+    for (const s of steps) {
+      const r = asJson(s.resultJson)
+      const verdict = (r.verdict as string | undefined) ?? '已完成'
+      items.push({
+        id: `step-${s.id}`,
+        kind: 'step',
+        title: `${s.parent?.order ?? ''}.${s.order} ${s.title}`,
+        detail: [r.measured, r.note].filter(Boolean).join(' — ') || (s.objective ?? ''),
+        status: verdict,
+        tone: verdict === '异常' ? 'brand' : 'green',
+        timestamp: iso(s.updatedAt),
+        link: { page: 'plan', ref: s.id },
+      })
+    }
+
+    for (const d of diagnoses) {
+      const recs = Array.isArray(d.recommendationsJson) ? d.recommendationsJson.length : 0
+      items.push({
+        id: `diagnosis-${d.id}`,
+        kind: 'diagnosis',
+        title: 'AI 诊断已生成',
+        detail: `${d.rootCause}（置信度 ${Math.round(d.confidence * 100)}%，${recs} 条建议）`,
+        status: '已保存',
+        tone: 'green',
+        timestamp: iso(d.createdAt),
+        link: { page: 'bench', ref: d.captureId ?? undefined },
+      })
+    }
+
+    return items
+      .sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+      .slice(0, 12)
+  }
+
   async photos(id: string): Promise<BoardPhoto[]> {
     await this.assertProject(id)
     const rows = await this.prisma.boardPhoto.findMany({
@@ -295,6 +371,28 @@ export class ProjectsService {
         }),
       ),
     }))
+  }
+
+  /** 总览页与工作台的 AI 调试参谋卡数据源 */
+  async latestDiagnosis(id: string): Promise<AiDiagnosisDto> {
+    await this.assertProject(id)
+    const d = await this.prisma.aiDiagnosis.findFirst({
+      where: { projectId: id },
+      orderBy: { createdAt: 'desc' },
+    })
+    if (!d) throw new NotFoundException(`项目暂无 AI 诊断: ${id}`)
+
+    return {
+      id: d.id,
+      captureId: d.captureId,
+      severity: d.severity,
+      rootCause: d.rootCause,
+      confidence: d.confidence,
+      evidence: (d.evidenceJson as string[]) ?? [],
+      alternativeCauses: (asJson(d.rawJson).alternativeCauses as never) ?? [],
+      recommendations: (d.recommendationsJson as never) ?? [],
+      createdAt: iso(d.createdAt),
+    }
   }
 
   async latestReport(id: string): Promise<Report> {

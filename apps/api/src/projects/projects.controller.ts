@@ -1,5 +1,7 @@
 import { Controller, Get, Param } from '@nestjs/common'
 import {
+  ActivityItemSchema,
+  AiDiagnosisSchema,
   BoardPhotoSchema,
   CaptureSummarySchema,
   DebugPlanSchema,
@@ -7,6 +9,8 @@ import {
   ProjectDetailSchema,
   ProjectSummarySchema,
   ReportSchema,
+  type ActivityItem,
+  type AiDiagnosis,
   type BoardPhoto,
   type CaptureSummary,
   type DebugPlan,
@@ -49,6 +53,16 @@ export class ProjectsController {
   @Get(':id/debug-steps')
   async plan(@Param('id') id: string): Promise<DebugPlan> {
     return DebugPlanSchema.parse(await this.projects.plan(id))
+  }
+
+  @Get(':id/activity')
+  async activity(@Param('id') id: string): Promise<ActivityItem[]> {
+    return z.array(ActivityItemSchema).parse(await this.projects.activity(id))
+  }
+
+  @Get(':id/diagnoses/latest')
+  async latestDiagnosis(@Param('id') id: string): Promise<AiDiagnosis> {
+    return AiDiagnosisSchema.parse(await this.projects.latestDiagnosis(id))
   }
 
   @Get(':id/photos')
