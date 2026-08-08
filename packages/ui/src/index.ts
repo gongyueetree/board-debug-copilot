@@ -5,6 +5,7 @@
  * MeasureGrid / AiPanel / StepTree / ReportPage。随对应 Phase 逐个补齐。
  */
 export { cn } from './cn'
+export { FftCanvas, fftMagnitudeDb } from './FftCanvas'
 export { RiskPill, type RiskLabel } from './RiskPill'
 export { SectionCard } from './SectionCard'
 export { StatCard, type StatTone } from './StatCard'

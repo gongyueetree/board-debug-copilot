@@ -1,17 +1,19 @@
-import { PagePlaceholder } from '@/components/PagePlaceholder'
+import { BenchClient } from '@/components/bench/BenchClient'
 
-export default function Page() {
+export const dynamic = 'force-dynamic'
+
+export default async function BenchPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+
   return (
-    <PagePlaceholder
-      title="调试工作台"
-      phase="P4"
-      spec="docs/03 页面 3"
-      points={[
-        '左 380px 接线指南 + 检查清单 + 信号源设置 + 3 个预设配置',
-        '中间实时波形（Canvas 双通道）+ FFT（自实现 Hann 窗）+ 测量结果网格 + 仪器控制条',
-        '右 380px AI 调试参谋（实时解读 / 可能原因 / 建议下一步 / 快捷操作）',
-        '危险确认：幅度 > 5Vpp 或偏置 != 0 时二次确认（硬性原则 #6）',
-      ]}
-    />
+    <div className="mx-auto max-w-[1800px]">
+      <header className="mb-4">
+        <h1 className="text-xl font-semibold text-slate-900">调试工作台</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          浏览器直连本机 Bridge 采集波形，云端不经手 USB 设备
+        </p>
+      </header>
+      <BenchClient projectId={id} />
+    </div>
   )
 }

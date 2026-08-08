@@ -603,12 +603,12 @@ event: error      data: {"code":"PROVIDER_ERROR","degraded":true}
 |---|---|---|---|---|---|---|---|---|
 | `normal` | 已补 Vref、R2 未贴 | 0.400Vpp | 0.400 | 3.992 | 4.50/0.51 | 9.98 | 0.32% | 无 CRITICAL；**不得编造问题**；confidence ≥0.8 |
 | `gain_error` **(默认 Demo)** | 已补 Vref、**R2 误贴/桥接** | 0.400Vpp | 0.400 | 2.002 | 3.50/1.50 | 5.00 | 0.35% | `GAIN_MISMATCH`；根因指向 R1∥R2；引用视觉桥接证据 |
-| `clipping` | 已补 Vref、R2 未贴 | **1.000Vpp** | 1.000 | 4.920 | 4.97/0.05 | 4.92(表观) | **9.4%** | `OUTPUT_CLIPPING`；建议把 W2 降到 ≤0.45Vpp 复测 |
-| `noisy` | 同 normal，去耦/地回路劣化 | 0.400Vpp | 0.400 | 3.99 | — | 9.98 | **2.1%** | `NOISE_EXCESSIVE`；FFT 噪底 −68→−48dBV；建议查 Cdec 与地回路 |
+| `clipping` | 已补 Vref、R2 未贴 | **1.000Vpp** | 1.002 | 4.960 | 4.98/0.02 | 4.95(表观) | **28.2%** | `OUTPUT_CLIPPING`；建议把 W2 降到 ≤0.45Vpp 复测 |
+| `noisy` | 同 normal，去耦/地回路劣化 | 0.400Vpp | 0.421 | 4.068 | — | 9.66 | **1.9%** | `NOISE_EXCESSIVE`；FFT 噪底 −68→−48dBV；建议查 Cdec 与地回路 |
 | `no_response` | **未补 Vref（U1.3 接 GND）** | 0.400Vpp | 0.400 | ≈0（DC 15mV） | 0.02/0.01 | ≈0 | n/a | `NO_RESPONSE`；根因指向单电源缺 Vref 偏置；对应项目 `currentIssue` |
 
 **这张表的设计意图**：`gain_error`(5.00) 与 `clipping`(4.92) 的**表观增益几乎相同**，
-唯一可靠的鉴别依据是 THD+N（0.35% vs 9.4%）、Vmax/Vmin 是否贴轨、以及输入幅值。
+唯一可靠的鉴别依据是 THD+N（0.40% vs 28.2%）、Vmax/Vmin 是否贴轨、以及输入幅值。
 智能体若只看增益就下结论必然误诊——这正是 §8.4 规则 8「判定顺序固定：先看削顶再看增益」的存在理由，
 也是评测用例 #11 的断言点。
 
@@ -734,7 +734,7 @@ export function streamAgent(input: AgentInput): AsyncIterable<AgentEvent>     //
 设计审查发现 ①单电源缺 Vref 偏置(CRITICAL) ②增益10下可用输入仅 0.49Vpp，削顶风险(CRITICAL)
    ↓  实测 scenario=no_response，CH2≈0V —— 印证 ①，正是项目 currentIssue
    ↓  用 W1 在 TP3 注入 2.5V 临时偏置（offset≠0 → 触发二次确认，硬性原则 #6 自然发生）
-   ↓  实测 scenario=clipping（输入 1.0Vpp）THD+N 9.4% 且贴轨 —— 印证 ②
+   ↓  实测 scenario=clipping（输入 1.0Vpp）THD+N 28.2% 且贴轨 —— 印证 ②
    ↓  降到 0.400Vpp，实测 scenario=gain_error，Gain 5.00 而非 10，THD+N 仅 0.35% 不是削顶
    ↓  视觉发现「R1/R2 间疑似焊锡桥接 92%」—— 测量×视觉互证，根因唯一：Rf 等效 50k
    ↓  清除桥接后 scenario=normal，Gain 9.98 —— 闭环验证
@@ -785,3 +785,14 @@ UI 本身是数据驱动的，效果图上的数字不会进代码——进代�
    接真实百万器件库时再引入检索，接入点是 §4.2 的器件参数行。
 2. **多轮上下文增长**：`messagesJson` 超过 20 轮时的摘要策略（建议：保留最近 6 轮 + 一段滚动摘要 + 全部结构化结论）。
 3. **语音**（`docs/00 §14`）：仅前端 Web Speech API 转文本后走 `general_chat`，智能体层无需改动。
+
+### 11.3 数值来源的更正记录
+
+`clipping` 的 THD+N 原记为 9.4%，那是估计值。P4 的 Bridge 用 numpy 按真实物理合成波形
+（输入 1.000Vpp × 增益 10 = 期望 10Vpp，打进 4.96Vpp 的轨）后实测为 **28.2%** —— 这种程度的
+削顶本来就该有这个失真量。已按实测值更正。
+
+同理，表内 Vpp 由 max−min 计算，叠加噪声后会略高于理想值（如 CH1 0.400 → 实测 0.403），
+这与真实示波器的行为一致，不做修正。**评测断言用区间而非等值**。
+
+更正后鉴别诊断反而更强：`gain_error` 0.40% vs `clipping` 28.2%，差两个数量级。

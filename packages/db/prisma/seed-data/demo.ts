@@ -6,7 +6,7 @@
  *
  * 故障叙事（跨模态收敛）：
  *   设计缺陷 U1.3 接 GND 而非 Vref  →  no_response（Vout≈0V，即 currentIssue）
- *   补 Vref 后输入过大             →  clipping（THD+N 9.4%，贴轨）
+ *   补 Vref 后输入过大             →  clipping（THD+N 28.2%，贴轨）
  *   降幅后仍增益减半               →  gain_error（R2 桥接使 Rf 等效 50k）← 默认场景
  *   清除桥接                       →  normal（Gain 9.98）
  */
@@ -342,7 +342,7 @@ export const VIOLATIONS: V[] = [
       'AD8605 轨到轨输出，余量 ±20mV，5V 轨下摆幅上限 4.96 Vpp',
       '设计增益 |Av| = Rf/Rin = 100k/10k = 10',
       '不削顶的输入上限 = 4.96/10 = 0.496 Vpp',
-      '实测 scenario=clipping：输入 1.000Vpp 时 THD+N 升至 9.4%，Vmax 4.97V 贴轨',
+      '实测 scenario=clipping：输入 1.000Vpp 时 THD+N 升至 28.2%，Vmax 4.98V 贴轨',
     ],
     risk: '输入稍大即产生严重谐波失真，传感器动态范围被压缩。',
     suggestion: '降低增益到 -5 以内，或提高供电至 ±5V 双电源以增加输出余量。',
@@ -512,9 +512,9 @@ export const CAPTURES = [
     label: '削顶：输入 1.000Vpp 超出摆幅',
     driveVpp: 1.0,
     ch1: { vpp: 1.0, vrms: 0.3536, freqHz: 1000.2, offsetV: 0.0035, vmax: 3.0, vmin: 2.0, thdnPct: 0.31 },
-    ch2: { vpp: 4.92, vrms: 1.8103, freqHz: 1000.2, offsetV: -0.0048, vmax: 4.97, vmin: 0.05, thdnPct: 9.4 },
-    gain: 4.92,
-    gainDb: 13.84,
+    ch2: { vpp: 4.96, vrms: 1.8103, freqHz: 1000.2, offsetV: -0.0048, vmax: 4.98, vmin: 0.02, thdnPct: 28.2 },
+    gain: 4.95,
+    gainDb: 13.89,
     phaseDeg: 176.8,
     phaseDeviationDeg: -3.2,
   },
@@ -525,7 +525,7 @@ export const CAPTURES = [
     label: '噪声：去耦与地回路劣化',
     driveVpp: 0.4,
     ch1: { vpp: 0.4, vrms: 0.1418, freqHz: 1000.2, offsetV: 0.0029, vmax: 2.71, vmin: 2.29, thdnPct: 0.42 },
-    ch2: { vpp: 3.99, vrms: 1.4142, freqHz: 1000.2, offsetV: -0.0071, vmax: 4.52, vmin: 0.53, thdnPct: 2.1 },
+    ch2: { vpp: 4.068, vrms: 1.4142, freqHz: 1000.2, offsetV: -0.0071, vmax: 4.55, vmin: 0.48, thdnPct: 1.9 },
     gain: 9.98,
     gainDb: 19.98,
     phaseDeg: 176.8,
