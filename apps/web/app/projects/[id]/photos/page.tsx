@@ -1,17 +1,22 @@
-import { PagePlaceholder } from '@/components/PagePlaceholder'
+import { PhotosClient } from '@/components/photo/PhotosClient'
+import { api } from '@/lib/api'
+import { prefetch } from '@/lib/server-fetch'
 
-export default function Page() {
+export const dynamic = 'force-dynamic'
+
+export default async function PhotosPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+  const photos = await prefetch(() => api.photos(id))
+
   return (
-    <PagePlaceholder
-      title="PCB 照片"
-      phase="P5"
-      spec="docs/03 页面 4"
-      points={[
-        '照片查看器（Konva：缩放旋转框选标注）+ KiCad 设计视图对照',
-        '对齐与映射状态三卡（板框对齐 / 参考点 / 元器件映射 98.2%）',
-        '与元器件关联的备注表格',
-        'AI 视觉检测结果列表（置信度 + 风险 pill，区分确定与疑似）',
-      ]}
-    />
+    <div className="mx-auto max-w-[1600px]">
+      <header className="mb-4">
+        <h1 className="text-xl font-semibold text-slate-900">PCB 照片</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          上传 PCB 实物照片，AI 识别并与原理图 / PCB 设计对比分析
+        </p>
+      </header>
+      <PhotosClient projectId={id} initial={photos} />
+    </div>
   )
 }

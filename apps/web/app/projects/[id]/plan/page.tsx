@@ -1,17 +1,29 @@
-import { PagePlaceholder } from '@/components/PagePlaceholder'
+import { PlanClient } from '@/components/plan/PlanClient'
+import { api } from '@/lib/api'
+import { prefetch } from '@/lib/server-fetch'
 
-export default function Page() {
+export const dynamic = 'force-dynamic'
+
+export default async function PlanPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+  const plan = await prefetch(() => api.plan(id))
+
   return (
-    <PagePlaceholder
-      title="调试计划"
-      phase="P6"
-      spec="docs/03 页面 5"
-      points={[
-        '问题描述横幅（currentIssue + 目标）',
-        '左 55% 调试流程树（5 分组 22 步，工具列与耗时列）',
-        '右 45% 步骤详情（操作目标 / 连接与设置 / 目标网点 / 预期参考值 / 异常与下一步）',
-        '「开始测量」携带 setupJson 跳转工作台并预填仪器参数',
-      ]}
-    />
+    <div className="mx-auto max-w-[1600px]">
+      <header className="mb-4 flex items-start justify-between">
+        <div>
+          <h1 className="inline-flex items-center gap-2 text-xl font-semibold text-slate-900">
+            调试计划
+            <span className="rounded-full bg-violet-50 px-2 py-0.5 text-[11px] font-normal text-violet-600">
+              AI 生成
+            </span>
+          </h1>
+          <p className="mt-1 text-sm text-slate-500">
+            步骤按证据链排序，异常分支直接指向下一步该测哪里
+          </p>
+        </div>
+      </header>
+      <PlanClient projectId={id} initial={plan} />
+    </div>
   )
 }

@@ -48,7 +48,32 @@ Railway Postgres 只有内网域名，本机连不上。
 | `GET /api/v1/projects/:id/photos` | 照片 + 视觉发现 + 标注 |
 | `GET /api/v1/projects/:id/reports/latest` | 最新报告 |
 
+| `POST /api/v1/ai/design-review` | 规则引擎 + AI 设计审查 |
+| `POST /api/v1/ai/chat` | SSE 流式对话 |
+
 响应全部经 `@app/contracts` 的 Zod schema 校验后才返回。
+
+## 冒烟检查
+
+```bash
+pnpm smoke
+```
+
+生产环境：
+
+```bash
+API=https://api-production-bc7f.up.railway.app WEB=https://board-debug-copilot.vercel.app pnpm smoke
+```
+
+带上本地 Bridge 一起查：加 `BRIDGE=http://127.0.0.1:3777`。
+
+检查覆盖全部 API 端点、6 个页面的 SSR 关键内容、规则引擎是否检出两条关键设计缺陷、
+SSE 事件是否成流、Bridge 的危险操作是否被拦。
+
+## 本地 Bridge
+
+调试工作台需要本机跑 Bridge（云端不碰 USB）。见 `apps/m2k-bridge/README.md`。
+`BRIDGE_MOCK=true` 时无需 ADALM2000 硬件，用 numpy 合成五个故障场景的波形。
 
 ## 目录结构
 
@@ -95,10 +120,10 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | P2 | 项目总览页 | ✅ |
 | P3 | 设计审查页 + 规则引擎 + AI 通道 | ✅ |
 | P4 | M2K Bridge + 调试工作台 | ✅ |
-| P5 | PCB 照片页 | ⬜ |
-| P6 | 调试计划页 | ⬜ |
-| P7 | 测试报告页 | ⬜ |
-| P8 | 部署上线 | ⬜ |
+| P5 | PCB 照片页 | ✅ |
+| P6 | 调试计划页 | ✅ |
+| P7 | 测试报告页 | ✅ |
+| P8 | 部署上线 + 冒烟验收 | ✅ |
 
 ## 部署（已上线）
 
