@@ -1,15 +1,27 @@
 /**
  * @app/kicad — 工程解析与原理图规则引擎
  *
- * P3 落地：rules（10 条原理图规则）+ graph（拓扑识别与 DesignDigest）。
- * parser/cli 待接真实 kicad-cli；MOCK_MODE 下设计图直接来自数据库。
+ * rules   原理图规则（确定性，先于 LLM）
+ * graph   拓扑识别与 DesignDigest
+ * cli     kicad-cli adapter，失败降级 mock 不崩项目
+ * parser  netlist S-expr 解析
  */
-export {
-  SCHEMATIC_RULES,
-  runSchematicRules,
-  parseValue,
-} from './rules/schematic-rules'
+export { SCHEMATIC_RULES, runSchematicRules, parseValue } from './rules/schematic-rules'
 export { finding, type DesignGraph, type SchematicRule } from './rules/types'
 export { buildDesignDigest, detectOpampTopology, type DigestInput } from './graph/digest'
+export {
+  parseProject,
+  probeKicadCli,
+  type KicadCliOptions,
+  type ParseOutcome,
+  type ParseStep,
+} from './cli/adapter'
+export {
+  inferCategory,
+  inferNetRole,
+  inferPinType,
+  parseNetlist,
+  parseSExpr,
+} from './parser/netlist'
 
-export const KICAD_PACKAGE_VERSION = '0.1.0'
+export const KICAD_PACKAGE_VERSION = '0.2.0'

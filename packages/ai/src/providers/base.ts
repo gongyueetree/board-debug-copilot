@@ -14,6 +14,8 @@ export interface ChatOptions {
   /** 0 表示确定性输出，路由分类固定用 0 */
   temperature?: number
   maxTokens?: number
+  /** 覆盖 provider 默认模型 */
+  model?: string
   /** 供 mock provider 查表，以及可观测性打点 */
   intent?: string
   scenario?: string
@@ -21,13 +23,15 @@ export interface ChatOptions {
 }
 
 export interface VisionImage {
-  /** base64 或可访问 URL，由 storage adapter 解析 */
+  /** base64（不含 data: 前缀） */
   data: string
   mimeType: string
 }
 
+export type ProviderName = 'claude' | 'deepseek' | 'gemini' | 'mock'
+
 export interface LlmProvider {
-  readonly name: 'claude' | 'deepseek' | 'mock'
+  readonly name: ProviderName
   chat(messages: ChatMessage[], opts?: ChatOptions): Promise<string>
   chatStream(messages: ChatMessage[], opts?: ChatOptions): AsyncIterable<string>
   vision(images: VisionImage[], prompt: string, opts?: ChatOptions): Promise<string>

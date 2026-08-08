@@ -6,7 +6,7 @@ import {
   StepStatusSchema,
   VisualSeveritySchema,
 } from './common'
-import { FindingSchema, VISION_CODES } from './finding'
+import { FindingCodeSchema, FindingSchema, VISION_CODES } from './finding'
 import { InstrumentPresetSchema, MeasurementsSchema } from './instrument'
 
 // ---------- Project ----------
@@ -162,6 +162,11 @@ export const AiDiagnosisSchema = z.object({
   id: z.string().optional(),
   captureId: z.string().nullable().optional(),
   severity: SeveritySchema,
+  /**
+   * 根因的受控 code。评测与下游逻辑断言这个字段而不是 rootCause 文本——
+   * 自然语言里出现「排除削顶」这样的否定语境时，字符串匹配会误判。
+   */
+  primaryCode: FindingCodeSchema.nullable().optional(),
   rootCause: z.string().min(4).max(400),
   confidence: z.number().min(0).max(1),
   evidence: z.array(z.string()).min(1).max(10),

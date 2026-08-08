@@ -53,6 +53,30 @@ Railway Postgres 只有内网域名，本机连不上。
 
 响应全部经 `@app/contracts` 的 Zod schema 校验后才返回。
 
+## 接真实模型
+
+```bash
+LLM_PROVIDER=gemini
+GEMINI_API_KEY=<你的 key>
+LLM_CHAT_MODEL=gemini-2.5-flash      # 可选，默认即此
+```
+
+Claude 用 `ANTHROPIC_API_KEY`，DeepSeek 用 `DEEPSEEK_API_KEY`，或统一用 `LLM_API_KEY`。
+**缺 key 不会报错**，自动降级为 mock，`GET /health` 的 `llm.degraded` 会标出来。
+
+SDK import 只允许出现在 `packages/ai/src/providers/`，应用代码永远只见 `LlmProvider` 接口。
+
+## 智能体评测
+
+```bash
+pnpm test:agent
+```
+
+docs/05 §14 的 12 条黄金用例。断言**结构与命中**而非措辞——诊断带受控的
+`primaryCode`，所以「可排除削顶」这种否定语境不会被字符串匹配误判成误诊。
+
+mock 基线 12/12。换真实 provider 重跑即可看出守卫管线在真实输出上的表现。
+
 ## 冒烟检查
 
 ```bash
@@ -107,7 +131,7 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | 变量 | 说明 |
 | --- | --- |
 | `MOCK_MODE=true` | 全链路无外部依赖演示（默认） |
-| `LLM_PROVIDER=claude\|deepseek\|mock` | 模型切换，不改代码 |
+| `LLM_PROVIDER=gemini\|claude\|deepseek\|mock` | 模型切换，不改代码；缺 key 自动降级为 mock |
 | `BRIDGE_MOCK=true` | 无 ADALM2000 硬件时合成波形 |
 | `BRIDGE_SCENARIO` | 五个故障场景，数值见 `docs/05` §11.1 |
 
