@@ -196,7 +196,7 @@ export class AiService {
 
     const diagnosis: AiDiagnosis =
       result.ok && result.value
-        ? this.groundDiagnosis(result.value, input)
+        ? this.groundDiagnosis(result.value, input, measurementFindings)
         : this.fallbackDiagnosis(measurementFindings, m)
 
     if (persist) {
@@ -474,11 +474,19 @@ export class AiService {
   private groundDiagnosis(
     d: Omit<AiDiagnosis, 'id' | 'captureId' | 'createdAt'>,
     input: Awaited<ReturnType<DesignGraphService['build']>>,
+    measurementFindings: Finding[],
   ): AiDiagnosis {
     const refs = new Set(input.graph.components.map((c) => c.ref))
     const nets = new Set(input.graph.nets.map((n) => n.name))
+
+    // L2 测量规则是「本次测量有没有故障」的权威。规则没检出、模型自己也只判 INFO 时，
+    // primaryCode 必须为空 —— 否则模型会把正在解释的历史缺陷（如已修复的 Vref 偏置）
+    // 当成本次故障填进来，下游按 code 分支的逻辑就会误动作。
+    const noFault = measurementFindings.length === 0 && d.severity === 'INFO'
+
     return {
       ...d,
+      primaryCode: noFault ? null : d.primaryCode,
       evidence: d.evidence.filter((e) => /\d|[A-Z]{1,3}\d+/.test(e)),
       recommendations: d.recommendations
         .filter((r) => !r.targetComponent || refs.has(r.targetComponent))

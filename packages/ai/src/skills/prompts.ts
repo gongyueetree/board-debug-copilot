@@ -25,7 +25,7 @@ export const SCHEMA_HINTS = {
 
   waveform_analyze: `{
   "severity": "CRITICAL|WARNING|INFO",
-  "primaryCode": "根因的受控 code：OUTPUT_CLIPPING|GAIN_MISMATCH|NO_RESPONSE|NOISE_EXCESSIVE|FREQ_MISMATCH|PHASE_MISMATCH|OFFSET_ABNORMAL|THDN_HIGH",
+  "primaryCode": "本次测量中存在的故障 code：OUTPUT_CLIPPING|GAIN_MISMATCH|NO_RESPONSE|NOISE_EXCESSIVE|FREQ_MISMATCH|PHASE_MISMATCH|OFFSET_ABNORMAL|THDN_HIGH。本次测量正常时必须为 null，不要填写历史故障或设计缺陷的 code",
   "rootCause": "唯一根因，≤200字",
   "confidence": 0.0,
   "evidence": ["必须含期望值与实测值的对比", "..."],
