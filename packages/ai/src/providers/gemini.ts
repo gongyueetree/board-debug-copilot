@@ -6,6 +6,7 @@
  * SDK import 只允许出现在 providers/ 下（CLAUDE.md：应用代码禁止直连 LLM SDK）。
  */
 import type { ChatMessage, ChatOptions, LlmProvider, VisionImage } from './base'
+import { sseEvents } from './sse'
 
 const BASE = 'https://generativelanguage.googleapis.com/v1beta'
 
@@ -101,30 +102,13 @@ export class GeminiProvider implements LlmProvider {
     )
     if (!res.body) throw new Error('Gemini 流式响应无 body')
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      // SSE 以空行分隔事件；半个事件留在 buffer 里等下一块
-      const events = buffer.split('\n\n')
-      buffer = events.pop() ?? ''
-
-      for (const ev of events) {
-        const line = ev.split('\n').find((l) => l.startsWith('data:'))
-        if (!line) continue
-        const json = line.slice(5).trim()
-        if (!json || json === '[DONE]') continue
-        try {
-          const delta = extractText(JSON.parse(json))
-          if (delta) yield delta
-        } catch {
-          /* 单个事件解析失败不中断整个流 */
-        }
+    for await (const ev of sseEvents(res.body)) {
+      if (!ev.data || ev.data === '[DONE]') continue
+      try {
+        const delta = extractText(JSON.parse(ev.data))
+        if (delta) yield delta
+      } catch {
+        /* 单个事件解析失败不中断整个流；截断由最终 finishReason 反映 */
       }
     }
   }

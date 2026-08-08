@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common'
 import {
   AiDiagnosisSchema,
   DesignReviewSchema,
+  FindingSchema,
   InstrumentPresetSchema,
   VisualFindingsSchema,
   requiresConfirm,
@@ -82,9 +83,19 @@ export class AiService {
     let summary = ''
 
     const digest = buildDesignDigest(input)
+    // origin 由系统赋值（AI），不属于模型该填的字段。
+    // 放进校验 schema 会让每条 finding 都因 "origin: Required" 失败，
+    // 表现为 LLM 部分永远静默降级、只剩规则引擎结果。
+    const ModelReviewSchema = DesignReviewSchema.partial({
+      bomRisk: true,
+      ercDrc: true,
+    }).extend({
+      findings: z.array(FindingSchema.omit({ origin: true })).min(1).max(12),
+    })
+
     const result = await runStructured(
       this.provider,
-      DesignReviewSchema.partial({ bomRisk: true, ercDrc: true }),
+      ModelReviewSchema,
       [
         { role: 'system', content: SKILL_SYSTEM.design_review ?? '' },
         {
@@ -122,12 +133,17 @@ export class AiService {
     const merged = dedupe([...ruleFindings, ...parsedFindings, ...aiFindings], stats)
     this.reportDropped('design_review', stats, (result.value?.findings ?? []).length)
 
+    // 截断必须按严重度而不是按来源：dedupe 的排序把 RULE_ENGINE 放在前面，
+    // 直接 slice(0,12) 会把 AI 独有的新发现全部挤出去，等于 LLM 白跑一趟。
+    const SEV = { CRITICAL: 0, WARNING: 1, INFO: 2 } as const
+    const ranked = [...merged].sort((a, b) => SEV[a.severity] - SEV[b.severity])
+
     const open = merged.filter((f) => !f.resolved)
     const review: DesignReview = {
       summary:
         summary ||
         `规则引擎检出 ${merged.length} 条设计问题，其中高风险 ${open.filter((f) => f.severity === 'CRITICAL').length} 条。`,
-      findings: merged.slice(0, 12),
+      findings: ranked.slice(0, 12),
       bomRisk: {
         high: open.filter((f) => f.severity === 'CRITICAL').length,
         medium: open.filter((f) => f.severity === 'WARNING').length,
@@ -484,19 +500,33 @@ export class AiService {
     // 当成本次故障填进来，下游按 code 分支的逻辑就会误动作。
     const noFault = measurementFindings.length === 0 && d.severity === 'INFO'
 
+    const evidence = d.evidence.filter((e) => /\d|[A-Z]{1,3}\d+/.test(e))
+    const recommendations = d.recommendations
+      .filter((r) => !r.targetComponent || refs.has(r.targetComponent))
+      .filter((r) => !r.targetNet || nets.has(r.targetNet))
+      .map((r) => ({
+        ...r,
+        instrumentPreset: r.instrumentPreset
+          ? (this.applySafety(r.instrumentPreset as InstrumentPreset) as never)
+          : undefined,
+      }))
+
+    // grounding 可能把整个数组过滤空 —— 模型引用了一批不存在的位号时就会发生。
+    // evidence 与 recommendations 都是 min(1)，清空会让响应 schema 校验失败并 500。
+    // 全被丢弃说明这次输出整体不可信，退回测量规则结论而不是产出半个对象。
+    if (evidence.length === 0 || recommendations.length === 0) {
+      this.logger.warn(
+        `诊断被 grounding 清空（evidence ${d.evidence.length}→${evidence.length}，` +
+          `recommendations ${d.recommendations.length}→${recommendations.length}），退回规则结论`,
+      )
+      return this.fallbackDiagnosis(measurementFindings, {})
+    }
+
     return {
       ...d,
       primaryCode: noFault ? null : d.primaryCode,
-      evidence: d.evidence.filter((e) => /\d|[A-Z]{1,3}\d+/.test(e)),
-      recommendations: d.recommendations
-        .filter((r) => !r.targetComponent || refs.has(r.targetComponent))
-        .filter((r) => !r.targetNet || nets.has(r.targetNet))
-        .map((r) => ({
-          ...r,
-          instrumentPreset: r.instrumentPreset
-            ? (this.applySafety(r.instrumentPreset as InstrumentPreset) as never)
-            : undefined,
-        })),
+      evidence,
+      recommendations,
     }
   }
 

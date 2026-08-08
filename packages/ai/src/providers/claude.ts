@@ -3,6 +3,7 @@
  * 同样走 fetch，SDK import 只允许出现在 providers/ 下。
  */
 import type { ChatMessage, ChatOptions, LlmProvider, VisionImage } from './base'
+import { sseEvents } from './sse'
 
 const BASE = 'https://api.anthropic.com/v1/messages'
 const VERSION = '2023-06-01'
@@ -65,29 +66,15 @@ export class ClaudeProvider implements LlmProvider {
     const res = await this.call({ ...toBody(messages, opts, true), model: this.model }, opts?.signal)
     if (!res.body) throw new Error('Claude 流式响应无 body')
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      const events = buffer.split('\n\n')
-      buffer = events.pop() ?? ''
-
-      for (const ev of events) {
-        const line = ev.split('\n').find((l) => l.startsWith('data:'))
-        if (!line) continue
-        try {
-          const msg = JSON.parse(line.slice(5).trim())
-          if (msg.type === 'content_block_delta' && msg.delta?.type === 'text_delta') {
-            yield msg.delta.text as string
-          }
-        } catch {
-          /* 忽略单个事件 */
+    for await (const ev of sseEvents(res.body)) {
+      if (!ev.data) continue
+      try {
+        const msg = JSON.parse(ev.data)
+        if (msg.type === 'content_block_delta' && msg.delta?.type === 'text_delta') {
+          yield msg.delta.text as string
         }
+      } catch {
+        /* 忽略单个事件 */
       }
     }
   }

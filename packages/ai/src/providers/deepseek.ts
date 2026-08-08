@@ -3,6 +3,7 @@
  * 同一个类也能用于任何 OpenAI 兼容端点，改 baseUrl 即可。
  */
 import type { ChatMessage, ChatOptions, LlmProvider, VisionImage } from './base'
+import { sseEvents } from './sse'
 
 export class DeepSeekProvider implements LlmProvider {
   readonly name = 'deepseek' as const
@@ -58,29 +59,13 @@ export class DeepSeekProvider implements LlmProvider {
     )
     if (!res.body) throw new Error('DeepSeek 流式响应无 body')
 
-    const reader = res.body.getReader()
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += decoder.decode(value, { stream: true })
-
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        if (!line.startsWith('data:')) continue
-        const json = line.slice(5).trim()
-        if (!json || json === '[DONE]') continue
-        try {
-          const msg = JSON.parse(json)
-          const delta = msg.choices?.[0]?.delta?.content
-          if (delta) yield delta as string
-        } catch {
-          /* 忽略单个事件 */
-        }
+    for await (const ev of sseEvents(res.body)) {
+      if (!ev.data || ev.data === '[DONE]') continue
+      try {
+        const delta = JSON.parse(ev.data).choices?.[0]?.delta?.content
+        if (delta) yield delta as string
+      } catch {
+        /* 忽略单个事件 */
       }
     }
   }
