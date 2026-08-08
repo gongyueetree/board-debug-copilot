@@ -23,11 +23,30 @@ pnpm dev
 pnpm bridge:dev
 ```
 
-数据库（P1 起需要）：
+数据库：
 
 ```bash
 pnpm db:migrate && pnpm db:seed
 ```
+
+无 Docker 时可直接用本机 PostgreSQL；有 Docker 则 `docker compose -f docker-compose.dev.yml up -d`。
+Railway 上迁移与 seed 由 `apps/api/railway.json` 的 `preDeployCommand` 自动执行——
+Railway Postgres 只有内网域名，本机连不上。
+
+## API
+
+| 端点 | 说明 |
+| --- | --- |
+| `GET /health` | 健康检查（不带 `api/v1` 前缀） |
+| `GET /api/v1/projects` | 项目列表 |
+| `GET /api/v1/projects/:id` | 项目详情 + 统计 |
+| `GET /api/v1/projects/:id/design` | 组件 / 网络 / 测试点 / 违规聚合 |
+| `GET /api/v1/projects/:id/captures` | 五个场景的测量摘要 |
+| `GET /api/v1/projects/:id/debug-steps` | 调试计划树 |
+| `GET /api/v1/projects/:id/photos` | 照片 + 视觉发现 + 标注 |
+| `GET /api/v1/projects/:id/reports/latest` | 最新报告 |
+
+响应全部经 `@app/contracts` 的 Zod schema 校验后才返回。
 
 ## 目录结构
 
@@ -70,7 +89,7 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | Phase | 内容 | 状态 |
 | --- | --- | --- |
 | P0 | monorepo 骨架 + Shell + /health + 三平台上线 | ✅ |
-| P1 | 数据库与 Seed | ⬜ |
+| P1 | 数据库与 Seed + 只读端点 | ✅ |
 | P2 | 项目总览页 | ⬜ |
 | P3 | 设计审查页 + 规则引擎 + AI 通道 | ⬜ |
 | P4 | M2K Bridge + 调试工作台 | ⬜ |
@@ -84,7 +103,7 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | 服务 | 平台 | 地址 |
 | --- | --- | --- |
 | web | Vercel | https://board-debug-copilot.vercel.app |
-| api | Railway | https://api-production-bc7f.up.railway.app（`/health`） |
+| api | Railway | https://api-production-bc7f.up.railway.app（`/health`、`/api/v1/projects`） |
 | worker | Railway | 常驻进程，监听 BullMQ 队列 `bdc-jobs` |
 | PostgreSQL / Redis | Railway | 内网 `postgres.railway.internal` / `redis.railway.internal` |
 
