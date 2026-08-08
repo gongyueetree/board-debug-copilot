@@ -495,10 +495,19 @@ export class AiService {
     const refs = new Set(input.graph.components.map((c) => c.ref))
     const nets = new Set(input.graph.nets.map((n) => n.name))
 
-    // L2 测量规则是「本次测量有没有故障」的权威。规则没检出、模型自己也只判 INFO 时，
-    // primaryCode 必须为空 —— 否则模型会把正在解释的历史缺陷（如已修复的 Vref 偏置）
-    // 当成本次故障填进来，下游按 code 分支的逻辑就会误动作。
-    const noFault = measurementFindings.length === 0 && d.severity === 'INFO'
+    // L2 测量规则是「本次测量有没有故障」的权威。
+    //
+    // 模型会把「这块板的设计缺陷有多严重」和「本次测量有多严重」混为一谈：
+    // normal 场景下它照样能讲出 Vref 偏置缺陷（那是真的），于是给出 CRITICAL
+    // 和一个故障 code —— 可那条缺陷在本次测量里已经被补焊解决了。
+    // 规则一条都没检出时，本次测量就不存在严重故障，severity 封顶到 WARNING，
+    // primaryCode 清空。模型的解释保留在 rootCause 与 evidence 里，不丢信息。
+    const noFault = measurementFindings.length === 0
+    const severity: AiDiagnosis['severity'] =
+      noFault && d.severity === 'CRITICAL' ? 'WARNING' : d.severity
+    if (noFault && d.severity === 'CRITICAL') {
+      this.logger.warn('测量规则未检出故障，模型判 CRITICAL，已按 L2 结论降为 WARNING')
+    }
 
     const evidence = d.evidence.filter((e) => /\d|[A-Z]{1,3}\d+/.test(e))
     const recommendations = d.recommendations
@@ -524,6 +533,7 @@ export class AiService {
 
     return {
       ...d,
+      severity,
       primaryCode: noFault ? null : d.primaryCode,
       evidence,
       recommendations,
