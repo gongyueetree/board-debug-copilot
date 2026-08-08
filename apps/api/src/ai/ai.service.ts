@@ -593,9 +593,19 @@ export class AiService {
       return this.fallbackDiagnosis(measurementFindings, {})
     }
 
+    // 根因尚未被物理验证时不得声称接近确定。
+    // 按设计，recommendations 的第一条就是「能证伪当前根因」的测量 ——
+    // 既然还要靠它证伪，就不是 99% 把握；报 0.99 会让用户跳过那一步，
+    // 而整个工作流就是「假设 → 验证」。
+    const confidence = Math.min(d.confidence, 0.95)
+    if (d.confidence > 0.95) {
+      this.logger.warn(`模型置信度 ${d.confidence}，未经实测验证，封顶到 0.95`)
+    }
+
     return {
       ...d,
       severity,
+      confidence,
       primaryCode: noFault ? null : d.primaryCode,
       evidence,
       recommendations,

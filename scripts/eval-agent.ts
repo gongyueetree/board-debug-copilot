@@ -81,7 +81,8 @@ const CASES: Case[] = [
       ok(d.primaryCode === 'GAIN_MISMATCH', `primaryCode=${d.primaryCode}，期望 GAIN_MISMATCH`)
       const all = [d.rootCause, ...d.evidence, ...d.recommendations.map((r: any) => r.action)].join(' ')
       ok(/R1|R2|Rf|反馈/.test(all), '根因链未指向反馈网络')
-      ok(d.confidence >= 0.4 && d.confidence <= 0.98, `confidence ${d.confidence} 越界`)
+      // docs/05 §14 用例 2：未经实测验证的根因不应接近确定
+      ok(d.confidence >= 0.4 && d.confidence <= 0.95, `confidence ${d.confidence} 越界`)
       ok(d.recommendations.length >= 1, '无推荐动作')
       return `${d.primaryCode}，根因指向反馈网络，confidence ${d.confidence}`
     },
