@@ -56,7 +56,11 @@ Railway Postgres 只有内网域名，本机连不上。
 | `POST /api/v1/projects/:id/kicad/upload` | 上传 KiCad zip 并解析 |
 | `GET /api/v1/projects/:id/kicad/status` | 解析状态与 parseLog |
 | `GET /api/v1/parts/search` `?q=` | 器件知识检索（pgvector → 关键词降级） |
+| `POST /api/v1/auth/login` `GET /auth/me` | 简单登录（无密码，邮箱即账号） |
 | 写操作 | 照片上传 / 标注 CRUD / 保存捕获 / 步骤流转 / 报告生成 |
+
+写操作会校验项目归属：`userId` 为空的项目是公共 demo，未登录也能完整演示；
+一旦项目归属某个用户，他人写入返回 401。
 
 响应全部经 `@app/contracts` 的 Zod schema 校验后才返回。
 

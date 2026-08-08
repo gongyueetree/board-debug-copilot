@@ -3,6 +3,7 @@ import {
   AiDiagnosisSchema,
   DesignReviewSchema,
   FindingSchema,
+  ModelVisualFindingsSchema,
   InstrumentPresetSchema,
   VisualFindingsSchema,
   requiresConfirm,
@@ -22,6 +23,7 @@ import {
   describeProvider,
   droppedRate,
   emptyStats,
+  extractJson,
   ground,
   routeIntent,
   runStructured,
@@ -31,6 +33,7 @@ import {
 import { buildDesignDigest, runSchematicRules } from '@app/kicad'
 import { z } from 'zod'
 import { PrismaService } from '../prisma/prisma.service'
+import { StorageService } from '../storage/storage.service'
 import { DesignGraphService } from './design-graph.service'
 
 export interface StreamEvent {
@@ -49,6 +52,7 @@ export class AiService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly graphs: DesignGraphService,
+    private readonly storage: StorageService,
   ) {
     const d = describeProvider()
     if (d.degraded) {
@@ -265,8 +269,11 @@ export class AiService {
     const input = await this.graphs.build(photo.projectId)
     const refs = input.graph.components.map((c) => c.ref).join(', ')
 
-    // MOCK_MODE 或无图像数据时，直接返回已落库结果（demo 走这条）
-    if (this.provider.name === 'mock' || !photo.objectKey.startsWith('data:')) {
+    // 图像来源有两种：上传后落在对象存储（objectKey 是路径），
+    // 或直接内联 data URL。seed 里的示意图两者都不是，只能用已落库结果。
+    const image = await this.loadImage(photo.objectKey)
+
+    if (this.provider.name === 'mock' || !image) {
       return {
         photoId,
         findings: photo.visualFindings.map((f) => ({
@@ -282,11 +289,10 @@ export class AiService {
       }
     }
 
-    const [, mime = 'image/jpeg', b64 = ''] =
-      /^data:([^;]+);base64,(.+)$/.exec(photo.objectKey) ?? []
-
-    let findings: VisualFindings['findings'] = []
+    const { mimeType: mime, base64: b64 } = image
+    let findings: Omit<VisualFindings['findings'][number], 'id'>[] = []
     try {
+      this.logger.log(`photo_analyze: 走真实多模态，图片 ${(b64.length / 1024) | 0} KB`)
       const raw = await this.provider.vision(
         [{ data: b64, mimeType: mime }],
         [
@@ -298,16 +304,27 @@ export class AiService {
           '</schema>',
           TASK_PROMPTS.photo_analyze,
         ].join('\n'),
+        { json: true },
       )
-      const parsed = VisualFindingsSchema.omit({ photoId: true }).safeParse(
-        JSON.parse(raw.replace(/```(?:json)?|```/g, '').trim()),
-      )
+      const parsed = ModelVisualFindingsSchema.safeParse(extractJson(raw))
       if (parsed.success) {
         const refSet = new Set(input.graph.components.map((c) => c.ref))
+        const before = parsed.data.findings.length
         findings = parsed.data.findings
           .filter((f) => !f.componentRef || refSet.has(f.componentRef))
           // 置信度 <0.6 不得标 CONFIRMED（docs/05 §8.3）
           .map((f) => ({ ...f, certainty: f.confidence < 0.6 ? 'SUSPECTED' : f.certainty }))
+        if (findings.length < before) {
+          this.logger.warn(`photo_analyze: ${before - findings.length} 条因位号不存在被丢弃`)
+        }
+      } else {
+        // 静默吞掉解析失败会让页面显示「0 条」而无从追查
+        this.logger.warn(
+          `photo_analyze schema 校验失败：${parsed.error.issues
+            .slice(0, 5)
+            .map((i) => `${i.path.join('.')}: ${i.message}`)
+            .join('; ')}｜原始输出前 200 字：${raw.slice(0, 200)}`,
+        )
       }
     } catch (err) {
       this.logger.warn(`photo_analyze 降级：${(err as Error).message}`)
@@ -328,9 +345,54 @@ export class AiService {
           })),
         }),
       ])
+      // 回读拿数据库赋的 id，响应 schema 要求它
+      const saved = await this.prisma.visualFinding.findMany({
+        where: { photoId },
+        orderBy: { confidence: 'desc' },
+      })
+      return {
+        photoId,
+        findings: saved.map((f) => ({
+          id: f.id,
+          code: f.code as VisualFindings['findings'][number]['code'],
+          title: f.title,
+          detail: f.detail,
+          confidence: f.confidence,
+          severity: f.severity as VisualFindings['findings'][number]['severity'],
+          componentRef: f.componentRef,
+          certainty: (f.confidence < 0.6 ? 'SUSPECTED' : 'CONFIRMED') as 'CONFIRMED' | 'SUSPECTED',
+        })),
+      }
     }
 
-    return { photoId, findings }
+    // 未落库时 id 还不存在，用稳定的占位串，前端只拿它做 key
+    return {
+      photoId,
+      findings: findings.map((f, i) => ({ ...f, id: `pending-${i}` })),
+    }
+  }
+
+
+  /**
+   * 取回图像用于多模态分析。
+   *
+   * 上传的照片 objectKey 是对象存储路径，不是 data URL —— 之前直接判
+   * startsWith('data:') 导致真实上传的照片永远走不到 vision，静默回落到已落库结果。
+   */
+  private async loadImage(
+    objectKey: string,
+  ): Promise<{ mimeType: string; base64: string } | null> {
+    const inline = /^data:([^;]+);base64,(.+)$/.exec(objectKey)
+    if (inline?.[1] && inline[2]) return { mimeType: inline[1], base64: inline[2] }
+
+    const buf = await this.storage.get(objectKey)
+    if (!buf) return null
+
+    // 按扩展名判 MIME；存储层不保留 content-type
+    const ext = objectKey.toLowerCase().split('.').pop() ?? ''
+    const mimeType =
+      ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg'
+    return { mimeType, base64: buf.toString('base64') }
   }
 
   // ------------------------------------------------------------ 测量指引

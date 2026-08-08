@@ -19,7 +19,12 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from .scenarios import SCENARIOS, SPECS, measure, synthesize
+# 相对导入只在按包运行时成立（uvicorn src.main:app）。PyInstaller 把入口
+# 当顶层脚本执行，没有父包，会 ImportError。两种方式都要能跑。
+try:
+    from .scenarios import SCENARIOS, SPECS, measure, synthesize
+except ImportError:  # pragma: no cover - 打包后的运行路径
+    from scenarios import SCENARIOS, SPECS, measure, synthesize
 
 BRIDGE_MOCK = os.getenv("BRIDGE_MOCK", "true").lower() == "true"
 ALLOWED_ORIGINS = [

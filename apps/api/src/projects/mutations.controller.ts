@@ -1,6 +1,8 @@
-import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common'
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post } from '@nestjs/common'
 import { StepStatusSchema } from '@app/contracts'
 import { z } from 'zod'
+import { AuthService } from '../auth/auth.service'
+import { bearer } from '../auth/auth.controller'
 import { MutationsService } from './mutations.service'
 import { ReportService } from './report.service'
 
@@ -16,10 +18,26 @@ export class MutationsController {
   constructor(
     private readonly mutations: MutationsService,
     private readonly reports: ReportService,
+    private readonly auth: AuthService,
   ) {}
 
+  /**
+   * 写操作前的归属校验。userId 为空的项目是公共 demo，任何人可写 ——
+   * 内置 Demo 必须在未登录状态下也能完整演示。
+   */
+  private async guard(projectId: string, authorization?: string) {
+    const user = await this.auth.verify(bearer(authorization))
+    await this.auth.assertCanWrite(projectId, user)
+    return user
+  }
+
   @Post('projects/:id/photos')
-  uploadPhoto(@Param('id') id: string, @Body() body: unknown) {
+  async uploadPhoto(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Headers('authorization') authorization?: string,
+  ) {
+    await this.guard(id, authorization)
     const input = z
       .object({
         filename: z.string().min(1).max(200),
@@ -51,7 +69,12 @@ export class MutationsController {
   }
 
   @Post('projects/:id/captures')
-  saveCapture(@Param('id') id: string, @Body() body: unknown) {
+  async saveCapture(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Headers('authorization') authorization?: string,
+  ) {
+    await this.guard(id, authorization)
     const input = z
       .object({
         label: z.string().max(120).optional(),
@@ -82,7 +105,12 @@ export class MutationsController {
   }
 
   @Post('projects/:id/debug-steps')
-  createStep(@Param('id') id: string, @Body() body: unknown) {
+  async createStep(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Headers('authorization') authorization?: string,
+  ) {
+    await this.guard(id, authorization)
     const input = z
       .object({
         groupId: z.string().optional(),
@@ -96,7 +124,8 @@ export class MutationsController {
   }
 
   @Post('projects/:id/reports')
-  generateReport(@Param('id') id: string) {
+  async generateReport(@Param('id') id: string, @Headers('authorization') authorization?: string) {
+    await this.guard(id, authorization)
     return this.reports.generate(id)
   }
 

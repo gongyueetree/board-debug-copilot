@@ -256,6 +256,18 @@ export const VisualFindingsSchema = z.object({
   photoId: z.string(),
   findings: z.array(VisualFindingSchema).max(8),
 })
+
+/**
+ * 模型面对的视觉输出 schema。
+ *
+ * id 由数据库赋值、photoId 由调用方带入，都不是模型能填也不该填的字段。
+ * 留在校验 schema 里只会让每次调用都因 "id: Required" 失败并静默返回空结果。
+ * 与 design_review 里 origin 是同一类问题，统一在这里收口。
+ */
+export const ModelVisualFindingsSchema = z.object({
+  findings: z.array(VisualFindingSchema.omit({ id: true })).max(8),
+})
+export type ModelVisualFindings = z.infer<typeof ModelVisualFindingsSchema>
 export type VisualFindings = z.infer<typeof VisualFindingsSchema>
 
 export const PhotoAnnotationSchema = z.object({
