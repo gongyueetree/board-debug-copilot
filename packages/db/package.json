@@ -13,7 +13,7 @@
   "scripts": {
     "build": "prisma generate && tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit",
-    "seed": "tsx prisma/seed.ts",
+    "seed": "tsx --env-file-if-exists=.env --env-file-if-exists=../../.env prisma/seed.ts",
     "clean": "rm -rf dist",
     "lint": "echo \"no lint configured\""
   },

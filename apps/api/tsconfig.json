@@ -17,7 +17,9 @@
     "skipLibCheck": true,
     "sourceMap": true,
     "declaration": false,
-    "incremental": true
+    "incremental": true,
+    // 放进 dist，否则 `rm -rf dist` 后 tsc 仍认为无需重新生成，静默产出空目录
+    "tsBuildInfoFile": "./dist/.tsbuildinfo"
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
