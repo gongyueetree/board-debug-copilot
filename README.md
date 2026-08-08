@@ -69,7 +69,7 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 
 | Phase | 内容 | 状态 |
 | --- | --- | --- |
-| P0 | monorepo 骨架 + Shell + /health | ✅ |
+| P0 | monorepo 骨架 + Shell + /health + 三平台上线 | ✅ |
 | P1 | 数据库与 Seed | ⬜ |
 | P2 | 项目总览页 | ⬜ |
 | P3 | 设计审查页 + 规则引擎 + AI 通道 | ⬜ |
@@ -79,12 +79,17 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | P7 | 测试报告页 | ⬜ |
 | P8 | 部署上线 | ⬜ |
 
-## 部署
+## 部署（已上线）
 
-- **web** → Vercel，Root Directory 设为 `apps/web`
-- **api / worker / PostgreSQL / Redis** → Railway
+| 服务 | 平台 | 地址 |
+| --- | --- | --- |
+| web | Vercel | https://board-debug-copilot.vercel.app |
+| api | Railway | https://api-production-bc7f.up.railway.app（`/health`） |
+| worker | Railway | 常驻进程，监听 BullMQ 队列 `bdc-jobs` |
+| PostgreSQL / Redis | Railway | 内网 `postgres.railway.internal` / `redis.railway.internal` |
 
-详见 `docs/04-deploy.md`。
+两侧都已连 GitHub，push 到 `main` 自动部署。
+配置细节见 `docs/04-deploy.md` 与 `docs/06-railway-setup.md`。
 
 ## 已知环境坑
 

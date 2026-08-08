@@ -1,8 +1,18 @@
 # 06 Railway 接入操作手册
 
-Vercel 侧已完成（web 自动部署，见 §3）。本文只覆盖 Railway 侧。
+> **状态：已接入完成**（2026-08-08）。本文保留为运维参考与重建步骤。
+>
+> | 资源 | 值 |
+> | --- | --- |
+> | Railway 项目 | `board-debug-copilot`（`gongyu-eetree's Projects`） |
+> | 项目 ID | `90b2b29a-b40a-48ce-b063-57813715d573` |
+> | 环境 | `production` = `ce85eca0-4f7c-4116-ac6b-e2d79c91d91b` |
+> | api 服务 | `1121b9cc-e005-471a-aeff-2db00dd0b3d8` |
+> | worker 服务 | `9cdc77c2-94e5-4148-bdc5-735114c28bd0` |
+> | api 公网域名 | https://api-production-bc7f.up.railway.app |
+> | 数据库 | Postgres + Redis（Railway 插件） |
 
-Railway CLI 的登录是浏览器配对流程，必须由账号持有人本人完成一次，之后才能用 CLI 建服务。
+Railway CLI 的登录是浏览器配对流程，必须由账号持有人本人完成一次。
 
 ## 1. 登录（一次性，需人工）
 
@@ -46,9 +56,18 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 | 设置项 | 值 |
 | --- | --- |
-| Root Directory | **留空（仓库根）** |
+| Root Directory | **`/`（仓库根）** |
 | Config File Path | `apps/api/railway.json` |
-| Watch Paths | `apps/api/**`, `packages/**`, `pnpm-lock.yaml` |
+| Watch Paths | `apps/api/**`, `packages/**`, `pnpm-lock.yaml`, `turbo.json` |
+
+CLI 里没有这三项的直接命令，走 GraphQL：
+
+```bash
+railway api 'mutation($env:String!,$svc:String!,$input:ServiceInstanceUpdateInput!){
+  serviceInstanceUpdate(environmentId:$env,serviceId:$svc,input:$input)}' \
+  --raw-var "env=<ENV_ID>" --raw-var "svc=<SERVICE_ID>" \
+  --var 'input={"railwayConfigFile":"apps/api/railway.json","rootDirectory":"/","watchPatterns":["apps/api/**","packages/**","pnpm-lock.yaml","turbo.json"]}'
+```
 
 `apps/api/railway.json` 已在仓库里，包含 build/start/healthcheck，无需手填命令。
 
