@@ -19,7 +19,8 @@
     "db:studio": "pnpm --filter @app/db exec prisma studio",
     "bridge:dev": "cd apps/m2k-bridge && uvicorn src.main:app --host 127.0.0.1 --port 3777 --reload",
     "smoke": "tsx scripts/smoke.ts",
-    "test:agent": "tsx scripts/eval-agent.ts"
+    "test:agent": "tsx scripts/eval-agent.ts",
+    "check:tracked": "bash scripts/check-tracked.sh"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
