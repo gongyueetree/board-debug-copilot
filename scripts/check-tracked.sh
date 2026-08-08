@@ -7,11 +7,11 @@
 set -e
 cd "$(dirname "$0")/.."
 
+# 只看真正的源码路径：apps/*/src、packages/*/src、scripts、prisma
 missed=$(git ls-files --others --ignored --exclude-standard \
-  | grep -E '^(apps|packages|scripts)/.*\.(ts|tsx|py|prisma)$' \
-  | grep -v node_modules \
-  | grep -v '/dist/' \
-  | grep -v '\.next/' || true)
+  | grep -E '\.(ts|tsx|py|prisma)$' \
+  | grep -E '^(apps/[^/]+/src/|packages/[^/]+/(src|prisma)/|scripts/)' \
+  | grep -vE '(node_modules|/dist/|\.next/|\.venv/|__pycache__)' || true)
 
 if [ -n "$missed" ]; then
   echo "以下源码文件被 .gitignore 忽略了，很可能是规则写得太宽："
