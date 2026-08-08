@@ -1,0 +1,92 @@
+# Board Debug Copilot（准 LabSight 原型）
+
+工程师上传 KiCad 工程 + PCB 照片，通过本地 ADALM2000 Bridge 采集测量数据，
+AI 智能体综合**设计上下文 + 元器件知识 + 测量数据 + 视觉信息**，
+输出设计审查、调试计划、故障诊断和调试报告。
+
+## 快速开始
+
+```bash
+pnpm install
+cp .env.example .env
+pnpm dev
+```
+
+- web → http://localhost:3000
+- api → http://localhost:3001/health
+
+`MOCK_MODE=true`（默认）下全链路无外部依赖：不需要 ADALM2000、KiCad CLI、真实元器件库或 LLM key。
+
+本地 Bridge（可选，P4 起需要）：
+
+```bash
+pnpm bridge:dev
+```
+
+数据库（P1 起需要）：
+
+```bash
+pnpm db:migrate && pnpm db:seed
+```
+
+## 目录结构
+
+```
+apps/web            Next.js App Router，6 个页面 + 元器件库
+apps/api            NestJS，REST + SSE 流式 AI + AI Orchestrator
+apps/worker         BullMQ，KiCad 解析 / ERC-DRC / BOM 匹配 / 报告生成
+apps/m2k-bridge     Python FastAPI，只监听 127.0.0.1:3777（不进 turbo pipeline）
+packages/db         Prisma schema + client
+packages/contracts  Zod DTO / schema（前后端共享）
+packages/ai         智能体：providers / context / evidence / tools / skills / guards
+packages/kicad      工程解析 + 原理图规则引擎
+packages/ui         跨页面复用组件
+packages/instrument-protocol  Bridge 的 WS/REST 消息契约
+```
+
+## 文档
+
+| 文档 | 内容 |
+| --- | --- |
+| `CLAUDE.md` | 项目记忆与硬性原则 |
+| `docs/01-architecture.md` | 系统架构、部署拓扑、数据流 |
+| `docs/02-data-model.md` | Prisma schema 全量定义 + Seed 规格 |
+| `docs/03-ui-spec.md` | 6 个页面 UI 规格 |
+| `docs/04-deploy.md` | Vercel / Railway 部署与环境变量 |
+| `docs/05-agent-design.md` | 智能体设计（packages/ai 实施规格） |
+| `prompts/P0..P8` | 分阶段执行 Prompt |
+
+## 关键开关
+
+| 变量 | 说明 |
+| --- | --- |
+| `MOCK_MODE=true` | 全链路无外部依赖演示（默认） |
+| `LLM_PROVIDER=claude\|deepseek\|mock` | 模型切换，不改代码 |
+| `BRIDGE_MOCK=true` | 无 ADALM2000 硬件时合成波形 |
+| `BRIDGE_SCENARIO` | 五个故障场景，数值见 `docs/05` §11.1 |
+
+## 实施进度
+
+| Phase | 内容 | 状态 |
+| --- | --- | --- |
+| P0 | monorepo 骨架 + Shell + /health | ✅ |
+| P1 | 数据库与 Seed | ⬜ |
+| P2 | 项目总览页 | ⬜ |
+| P3 | 设计审查页 + 规则引擎 + AI 通道 | ⬜ |
+| P4 | M2K Bridge + 调试工作台 | ⬜ |
+| P5 | PCB 照片页 | ⬜ |
+| P6 | 调试计划页 | ⬜ |
+| P7 | 测试报告页 | ⬜ |
+| P8 | 部署上线 | ⬜ |
+
+## 部署
+
+- **web** → Vercel，Root Directory 设为 `apps/web`
+- **api / worker / PostgreSQL / Redis** → Railway
+
+详见 `docs/04-deploy.md`。
+
+## 已知环境坑
+
+国内镜像（`registry.npmmirror.com`）缺 `@turbo/*` 平台二进制，可选依赖会被静默跳过，
+导致 turbo 报 `did not find any binaries`。仓库 `.npmrc` 已把该 scope 指回官方源。

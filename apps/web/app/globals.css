@@ -1,0 +1,17 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+body {
+  -webkit-font-smoothing: antialiased;
+}
+
+@layer components {
+  .bdc-card {
+    @apply rounded-card border border-slate-200 bg-white;
+  }
+}

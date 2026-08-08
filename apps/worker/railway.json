@@ -1,0 +1,12 @@
+{
+  "$schema": "https://railway.app/railway.schema.json",
+  "build": {
+    "builder": "NIXPACKS",
+    "buildCommand": "corepack enable && pnpm install --frozen-lockfile && pnpm turbo build --filter=@app/worker"
+  },
+  "deploy": {
+    "startCommand": "pnpm --filter @app/worker run start",
+    "restartPolicyType": "ON_FAILURE",
+    "restartPolicyMaxRetries": 10
+  }
+}

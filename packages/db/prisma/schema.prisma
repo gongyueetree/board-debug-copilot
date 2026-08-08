@@ -1,0 +1,368 @@
+// Board Debug Copilot — 数据模型
+// 权威定义见 docs/02-data-model.md，关系不可改，字段可细化。
+// 波形原始数组不入库，存对象存储，Capture.waveformObjectKey 引用。
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ProjectStatus {
+  CREATED
+  UPLOADED
+  PARSING
+  READY
+  ERROR
+}
+
+enum FileKind {
+  KICAD_ZIP
+  KICAD_PROJECT
+  SCHEMATIC
+  PCB
+  BOM
+  NETLIST
+  ERC_REPORT
+  DRC_REPORT
+  PCB_PHOTO
+  CAPTURE_FILE
+  REPORT
+  OTHER
+}
+
+enum CaptureKind {
+  OSCILLOSCOPE
+  FFT
+  BODE
+  LOGIC
+  DMM
+  POWER
+}
+
+enum DiagnosisSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum StepStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  FAILED
+  SKIPPED
+}
+
+model User {
+  id        String   @id @default(uuid())
+  email     String?  @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  projects  Project[]
+}
+
+model Project {
+  id           String        @id @default(uuid())
+  userId       String?
+  name         String
+  description  String?
+  status       ProjectStatus @default(CREATED)
+  currentIssue String?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  user       User?           @relation(fields: [userId], references: [id])
+  files      ProjectFile[]
+  components Component[]
+  nets       Net[]
+  testPoints TestPoint[]
+  photos     BoardPhoto[]
+  captures   Capture[]
+  debugSteps DebugStep[]
+  aiThreads  AiThread[]
+  reports    DebugReport[]
+  violations RuleViolation[]
+}
+
+model ProjectFile {
+  id          String   @id @default(uuid())
+  projectId   String
+  kind        FileKind
+  filename    String
+  objectKey   String
+  mimeType    String?
+  sizeBytes   Int?
+  checksum    String?
+  parseStatus String?
+  parseLog    String?
+  createdAt   DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}
+
+model Component {
+  id           String  @id @default(uuid())
+  projectId    String
+  ref          String
+  value        String?
+  symbol       String?
+  footprint    String?
+  partNumber   String?
+  manufacturer String?
+  datasheetUrl String?
+  x            Float?
+  y            Float?
+  rotation     Float?
+  side         String?
+  rawJson      Json?
+
+  project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pins             Pin[]
+  bomMatches       PartMatch[]
+  testPoints       TestPoint[]
+  photoAnnotations PhotoAnnotation[]
+
+  @@index([projectId])
+  @@index([projectId, ref])
+}
+
+model Pin {
+  id          String  @id @default(uuid())
+  componentId String
+  number      String
+  name        String?
+  type        String?
+  netId       String?
+
+  component Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  net       Net?      @relation(fields: [netId], references: [id])
+
+  @@index([componentId])
+  @@index([netId])
+}
+
+model Net {
+  id                String  @id @default(uuid())
+  projectId         String
+  name              String
+  netClass          String?
+  inferredRole      String?
+  expectedVoltage   String?
+  expectedFrequency String?
+  rawJson           Json?
+
+  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pins       Pin[]
+  testPoints TestPoint[]
+  captures   Capture[]
+
+  @@index([projectId])
+  @@index([projectId, name])
+}
+
+model TestPoint {
+  id          String   @id @default(uuid())
+  projectId   String
+  componentId String?
+  netId       String?
+  label       String
+  description String?
+  x           Float?
+  y           Float?
+  source      String
+  createdAt   DateTime @default(now())
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  component Component? @relation(fields: [componentId], references: [id])
+  net       Net?       @relation(fields: [netId], references: [id])
+
+  @@index([projectId])
+}
+
+model PartMatch {
+  id                String  @id @default(uuid())
+  componentId       String
+  source            String
+  externalPartId    String?
+  matchedPartNumber String?
+  confidence        Float?
+  summaryJson       Json?
+
+  component Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
+
+  @@index([componentId])
+}
+
+model RuleViolation {
+  id              String            @id @default(uuid())
+  projectId       String
+  origin          String
+  code            String
+  severity        DiagnosisSeverity
+  title           String
+  description     String
+  evidence        String?
+  risk            String?
+  suggestion      String?
+  recommendedTest String?
+  componentRef    String?
+  netName         String?
+  resolved        Boolean           @default(false)
+  createdAt       DateTime          @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([projectId, severity])
+}
+
+model BoardPhoto {
+  id            String   @id @default(uuid())
+  projectId     String
+  objectKey     String
+  side          String?
+  alignmentJson Json?
+  createdAt     DateTime @default(now())
+
+  project        Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  annotations    PhotoAnnotation[]
+  visualFindings VisualFinding[]
+
+  @@index([projectId])
+}
+
+model PhotoAnnotation {
+  id          String   @id @default(uuid())
+  photoId     String
+  componentId String?
+  netName     String?
+  kind        String
+  regionJson  Json
+  note        String?
+  createdBy   String?
+  createdAt   DateTime @default(now())
+
+  photo     BoardPhoto @relation(fields: [photoId], references: [id], onDelete: Cascade)
+  component Component? @relation(fields: [componentId], references: [id])
+
+  @@index([photoId])
+}
+
+model VisualFinding {
+  id           String   @id @default(uuid())
+  photoId      String
+  code         String
+  title        String
+  detail       String
+  confidence   Float
+  severity     String
+  componentRef String?
+  createdAt    DateTime @default(now())
+
+  photo BoardPhoto @relation(fields: [photoId], references: [id], onDelete: Cascade)
+
+  @@index([photoId])
+}
+
+model Capture {
+  id                  String      @id @default(uuid())
+  projectId           String
+  netId               String?
+  kind                CaptureKind
+  label               String?
+  hardwareSetupJson   Json
+  measurementsJson    Json
+  waveformObjectKey   String?
+  thumbnailObjectKey  String?
+  createdAt           DateTime    @default(now())
+  debugStepId         String?
+
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  net       Net?         @relation(fields: [netId], references: [id])
+  diagnosis AiDiagnosis?
+  debugStep DebugStep?   @relation(fields: [debugStepId], references: [id])
+
+  @@index([projectId])
+}
+
+model AiDiagnosis {
+  id                  String            @id @default(uuid())
+  captureId           String?           @unique
+  projectId           String
+  severity            DiagnosisSeverity
+  rootCause           String
+  confidence          Float
+  evidenceJson        Json
+  recommendationsJson Json
+  rawJson             Json?
+  createdAt           DateTime          @default(now())
+
+  capture Capture? @relation(fields: [captureId], references: [id])
+
+  @@index([projectId])
+}
+
+model DebugStep {
+  id              String     @id @default(uuid())
+  projectId       String
+  parentId        String?
+  order           Int
+  title           String
+  objective       String?
+  toolHint        String?
+  estimateMin     Int?
+  setupJson       Json?
+  targetNet       String?
+  targetComponent String?
+  expectedResult  String?
+  abnormalNext    String?
+  status          StepStatus @default(PENDING)
+  resultJson      Json?
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  project  Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parent   DebugStep?  @relation("StepTree", fields: [parentId], references: [id])
+  children DebugStep[] @relation("StepTree")
+  captures Capture[]
+
+  @@index([projectId])
+  @@index([parentId])
+}
+
+model AiThread {
+  id           String   @id @default(uuid())
+  projectId    String
+  mode         String
+  messagesJson Json
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, mode])
+}
+
+model DebugReport {
+  id             String   @id @default(uuid())
+  projectId      String
+  title          String
+  version        String   @default("v1.0")
+  author         String?
+  coverObjectKey String?
+  markdown       String
+  tocJson        Json?
+  statsJson      Json?
+  createdAt      DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+}

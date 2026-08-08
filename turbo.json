@@ -1,0 +1,33 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalEnv": [
+    "NODE_ENV",
+    "MOCK_MODE",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "LLM_PROVIDER",
+    "LLM_API_KEY",
+    "LLM_CHAT_MODEL",
+    "LLM_VISION_MODEL",
+    "STORAGE_ADAPTER",
+    "NEXT_PUBLIC_API_BASE_URL",
+    "NEXT_PUBLIC_BRIDGE_URL"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", ".next/**", "!.next/cache/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "typecheck": {
+      "dependsOn": ["^build"]
+    },
+    "lint": {},
+    "clean": {
+      "cache": false
+    }
+  }
+}

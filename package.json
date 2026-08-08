@@ -1,0 +1,38 @@
+{
+  "name": "board-debug-copilot",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.28.2",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "turbo dev",
+    "build": "turbo build",
+    "lint": "turbo lint",
+    "typecheck": "turbo typecheck",
+    "clean": "turbo clean && rm -rf node_modules",
+    "db:generate": "pnpm --filter @app/db exec prisma generate",
+    "db:migrate": "pnpm --filter @app/db exec prisma migrate dev",
+    "db:push": "pnpm --filter @app/db exec prisma db push",
+    "db:seed": "pnpm --filter @app/db run seed",
+    "db:studio": "pnpm --filter @app/db exec prisma studio",
+    "bridge:dev": "cd apps/m2k-bridge && uvicorn src.main:app --host 127.0.0.1 --port 3777 --reload"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "prettier": "^3.4.2",
+    "turbo": "^2.3.3",
+    "typescript": "^5.7.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@prisma/client",
+      "@prisma/engines",
+      "prisma",
+      "esbuild",
+      "sharp",
+      "msgpackr-extract"
+    ]
+  }
+}
