@@ -4,6 +4,7 @@ import { SectionCard, cn } from '@app/ui'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { api, queryKeys, type Report } from '@/lib/api'
+import { useGenerateReport } from '@/lib/mutations'
 
 /** 极简 Markdown 渲染器：标题 / 表格 / 列表 / 段落。报告只用到这几种。 */
 function renderMarkdown(md: string): React.ReactNode[] {
@@ -115,6 +116,8 @@ export function ReportClient({
 
   const [view, setView] = useState<'page' | 'outline'>('page')
   const [zoom, setZoom] = useState(100)
+  const [note, setNote] = useState<string | null>(null)
+  const generate = useGenerateReport(projectId)
   const body = useMemo(() => (data ? renderMarkdown(data.markdown) : []), [data])
 
   if (!data) {
@@ -202,11 +205,25 @@ export function ReportClient({
           </button>
           <button
             type="button"
+            disabled={generate.isPending}
+            onClick={() =>
+              generate.mutate(undefined, {
+                onSuccess: (r) => setNote(`已生成 ${r.version}`),
+                onError: (e) => setNote(e.message),
+              })
+            }
+            className="ml-auto rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white disabled:opacity-50"
+          >
+            {generate.isPending ? '生成中…' : '重新生成报告'}
+          </button>
+          <button
+            type="button"
             onClick={download}
-            className="ml-auto rounded-lg bg-brand px-3 py-1.5 text-xs font-medium text-white"
+            className="rounded-lg border border-slate-200 px-3 py-1.5 text-xs text-slate-600"
           >
             下载 Markdown
           </button>
+          {note && <span className="text-[11px] text-slate-500">{note}</span>}
         </div>
 
         <div className="overflow-auto rounded-card border border-slate-200 bg-slate-100 p-6">

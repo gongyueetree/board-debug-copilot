@@ -5,6 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useRouter } from 'next/navigation'
 import { useState } from 'react'
 import { api, queryKeys, type DebugPlan } from '@/lib/api'
+import { useCreateStep, useUpdateStep } from '@/lib/mutations'
 import type { DebugStep } from '@app/contracts'
 
 const STATUS_STYLE = {
@@ -31,6 +32,11 @@ export function PlanClient({
 
   const [openGroups, setOpenGroups] = useState<Set<string>>(new Set())
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [newTitle, setNewTitle] = useState('')
+  const updateStep = useUpdateStep(projectId)
+  const createStep = useCreateStep(projectId)
 
   if (!data) {
     return (
@@ -152,18 +158,83 @@ export function PlanClient({
               </li>
             ))}
           </ul>
+          <div className="border-t border-slate-100 p-2">
+            {adding ? (
+              <div className="flex gap-1.5">
+                <input
+                  autoFocus
+                  value={newTitle}
+                  onChange={(e) => setNewTitle(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') setAdding(false)
+                    if (e.key === 'Enter' && newTitle.trim()) {
+                      createStep.mutate(
+                        { title: newTitle.trim() },
+                        {
+                          onSuccess: () => {
+                            setNewTitle('')
+                            setAdding(false)
+                            setToast('已添加自定义步骤')
+                          },
+                          onError: (err) => setToast(err.message),
+                        },
+                      )
+                    }
+                  }}
+                  placeholder="步骤标题，回车保存，Esc 取消"
+                  className="flex-1 rounded border border-slate-200 px-2 py-1 text-[11px] focus:border-brand focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setAdding(false)}
+                  className="rounded px-2 py-1 text-[11px] text-slate-500"
+                >
+                  取消
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setAdding(true)}
+                className="w-full rounded border border-dashed border-slate-300 py-1.5 text-[11px] text-slate-500 hover:bg-slate-50"
+              >
+                + 添加自定义步骤
+              </button>
+            )}
+            {toast && <p className="mt-1.5 text-[10px] text-slate-500">{toast}</p>}
+          </div>
         </SectionCard>
 
         {selected && (
           <StepDetail
             step={selected}
             result={result}
+            busy={updateStep.isPending}
             onStartMeasure={() => {
               // 携带 setupJson 跳转工作台（P6 验收项）
               const q = new URLSearchParams({ step: selected.id })
               if (selected.setup?.mode) q.set('mode', selected.setup.mode)
               router.push(`/projects/${projectId}/bench?${q.toString()}`)
             }}
+            onComplete={(measured, verdict) =>
+              updateStep.mutate(
+                {
+                  stepId: selected.id,
+                  status: 'COMPLETED',
+                  result: { measured, verdict, recordedAt: new Date().toISOString() },
+                },
+                {
+                  onSuccess: () => setToast(`${selected.number} 已标记完成`),
+                  onError: (err) => setToast(err.message),
+                },
+              )
+            }
+            onReset={() =>
+              updateStep.mutate(
+                { stepId: selected.id, status: 'PENDING' },
+                { onSuccess: () => setToast(`${selected.number} 已重置为待执行`) },
+              )
+            }
           />
         )}
       </div>
@@ -174,7 +245,10 @@ export function PlanClient({
 function StepDetail({
   step,
   result,
+  busy,
   onStartMeasure,
+  onComplete,
+  onReset,
 }: {
   step: DebugStep
   result: {
@@ -183,8 +257,13 @@ function StepDetail({
     note?: string
     expectedValue?: { value: string; unit: string; label: string }
   } | null
+  busy: boolean
   onStartMeasure: () => void
+  onComplete: (measured: string, verdict: string) => void
+  onReset: () => void
 }) {
+  const [measured, setMeasured] = useState(result?.measured ?? '')
+  const [verdict, setVerdict] = useState(result?.verdict ?? '正常')
   return (
     <SectionCard
       title={
@@ -284,26 +363,52 @@ function StepDetail({
         </div>
       </div>
 
-      <div className="mt-4 flex gap-2 border-t border-slate-100 pt-3">
-        <button
-          type="button"
-          onClick={onStartMeasure}
-          className="flex-1 rounded-lg bg-brand py-2 text-xs font-medium text-white hover:bg-brand-hover"
-        >
-          开始测量
-        </button>
-        <button
-          type="button"
-          className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
-        >
-          标记完成
-        </button>
-        <button
-          type="button"
-          className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50"
-        >
-          创建调试记录
-        </button>
+      <div className="mt-4 border-t border-slate-100 pt-3">
+        <div className="mb-2 flex gap-1.5">
+          <input
+            value={measured}
+            onChange={(e) => setMeasured(e.target.value)}
+            placeholder="实测值，如 2.50 V"
+            className="flex-1 rounded border border-slate-200 px-2 py-1.5 text-[11px] focus:border-brand focus:outline-none"
+          />
+          <select
+            value={verdict}
+            onChange={(e) => setVerdict(e.target.value)}
+            className="rounded border border-slate-200 px-2 py-1.5 text-[11px]"
+          >
+            <option>正常</option>
+            <option>异常</option>
+            <option>待复测</option>
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={onStartMeasure}
+            className="flex-1 rounded-lg bg-brand py-2 text-xs font-medium text-white hover:bg-brand-hover"
+          >
+            开始测量
+          </button>
+          <button
+            type="button"
+            disabled={busy || !measured.trim()}
+            onClick={() => onComplete(measured.trim(), verdict)}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+            title={measured.trim() ? '' : '先填写实测值'}
+          >
+            {busy ? '保存中…' : '标记完成'}
+          </button>
+          {step.status === 'COMPLETED' && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={onReset}
+              className="rounded-lg border border-slate-200 px-3 py-2 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-40"
+            >
+              重置
+            </button>
+          )}
+        </div>
       </div>
     </SectionCard>
   )

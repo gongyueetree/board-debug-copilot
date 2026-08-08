@@ -2,8 +2,14 @@
 
 import { AI_DISCLAIMER, RiskPill, SectionCard, cn } from '@app/ui'
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api, queryKeys, type BoardPhoto } from '@/lib/api'
+import {
+  useAnalyzePhoto,
+  useCreateAnnotation,
+  useDeleteAnnotation,
+  useUploadPhoto,
+} from '@/lib/mutations'
 import { PhotoViewer } from './PhotoViewer'
 
 const QUICK_ASKS = [
@@ -26,13 +32,17 @@ export function PhotosClient({
   })
 
   const [activeId, setActiveId] = useState<string | null>(null)
-  const [localNotes, setLocalNotes] = useState<
-    { id: string; region: { x: number; y: number; w: number; h: number }; note: string }[]
-  >([])
+  const [photoIdx, setPhotoIdx] = useState(0)
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState<string | null>(null)
+  const [toast, setToast] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement | null>(null)
 
-  const photo = data?.[0]
+  const photo = data?.[photoIdx] ?? data?.[0]
+  const upload = useUploadPhoto(projectId)
+  const createAnnotation = useCreateAnnotation(projectId, photo?.id ?? '')
+  const deleteAnnotation = useDeleteAnnotation(projectId)
+  const analyze = useAnalyzePhoto(projectId)
   if (!photo) {
     return (
       <div className="rounded-card border border-slate-200 bg-white p-6 text-sm text-slate-500">
@@ -61,34 +71,85 @@ export function PhotosClient({
   return (
     <div className="space-y-4">
       <div className="grid gap-4 xl:grid-cols-2">
-        <SectionCard title="PCB 实物照片" bodyClassName="p-3">
-          <PhotoViewer
-            photo={{
-              ...photo,
-              annotations: [
-                ...photo.annotations,
-                ...localNotes.map((n) => ({
-                  id: n.id,
-                  kind: 'question',
-                  region: n.region,
-                  note: n.note,
-                  componentRef: null,
-                  createdBy: 'ZH',
-                  createdAt: new Date().toISOString(),
-                })),
-              ],
-            }}
-            activeId={activeId}
-            onActivate={setActiveId}
-            onCreate={(region) => {
-              const id = `local-${localNotes.length + 1}`
-              setLocalNotes((prev) => [
-                ...prev,
-                { id, region, note: `待确认区域 ${prev.length + 1}` },
-              ])
-              setActiveId(id)
+        <SectionCard
+          title="PCB 实物照片"
+          action={
+            <div className="flex items-center gap-2 text-[11px]">
+              {(data?.length ?? 0) > 1 && (
+                <select
+                  value={photoIdx}
+                  onChange={(e) => setPhotoIdx(Number(e.target.value))}
+                  className="rounded border border-slate-200 px-1.5 py-0.5"
+                >
+                  {data?.map((p, i) => (
+                    <option key={p.id} value={i}>
+                      照片 {i + 1}（{p.side}）
+                    </option>
+                  ))}
+                </select>
+              )}
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                disabled={upload.isPending}
+                className="rounded bg-blue-50 px-2 py-1 font-medium text-brand disabled:opacity-50"
+              >
+                {upload.isPending ? '上传中…' : '上传照片'}
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  analyze.mutate(photo.id, {
+                    onSuccess: (r) => setToast(`重新检测完成，${r.findings.length} 条结果`),
+                    onError: (e) => setToast(`检测失败：${e.message}`),
+                  })
+                }
+                disabled={analyze.isPending}
+                className="rounded bg-slate-100 px-2 py-1 text-slate-600 disabled:opacity-50"
+              >
+                {analyze.isPending ? '检测中…' : '重新检测'}
+              </button>
+            </div>
+          }
+          bodyClassName="p-3"
+        >
+          <input
+            ref={fileRef}
+            type="file"
+            accept="image/jpeg,image/png,image/webp"
+            className="hidden"
+            onChange={(e) => {
+              const f = e.target.files?.[0]
+              if (!f) return
+              upload.mutate(f, {
+                onSuccess: (r) =>
+                  setToast(`已上传 ${f.name}（${(r.sizeBytes / 1024).toFixed(0)} KB）`),
+                // 类型/大小校验在服务端，错误信息直接透给用户
+                onError: (err) => setToast(err.message),
+              })
+              e.target.value = ''
             }}
           />
+          <PhotoViewer
+            photo={photo}
+            activeId={activeId}
+            onActivate={setActiveId}
+            onCreate={(region) =>
+              createAnnotation.mutate(
+                { kind: 'question', region, note: '待确认区域' },
+                {
+                  onSuccess: (r) => {
+                    setActiveId(r.id)
+                    setToast('标注已保存')
+                  },
+                  onError: (err) => setToast(`标注保存失败：${err.message}`),
+                },
+              )
+            }
+          />
+          {toast && (
+            <p className="mt-2 rounded bg-slate-50 px-2 py-1 text-[11px] text-slate-600">{toast}</p>
+          )}
         </SectionCard>
 
         <SectionCard
@@ -193,31 +254,41 @@ export function PhotosClient({
               </tr>
             </thead>
             <tbody>
-              {[...photo.annotations, ...localNotes.map((n) => ({ id: n.id, componentRef: null, region: n.region, note: n.note, createdBy: 'ZH' }))].map(
-                (a) => (
-                  <tr
-                    key={a.id}
-                    onClick={() => setActiveId(a.id)}
-                    className={cn(
-                      'cursor-pointer border-b border-slate-50 hover:bg-slate-50',
-                      a.id === activeId && 'bg-blue-50',
-                    )}
-                  >
-                    <td className="px-3 py-1.5 font-medium text-slate-700">
-                      {a.componentRef ?? '—'}
-                    </td>
-                    <td className="px-3 py-1.5 text-slate-500">
-                      {(a.region.x * 100).toFixed(0)}%, {(a.region.y * 100).toFixed(0)}%
-                    </td>
-                    <td className="px-3 py-1.5 text-slate-600">{a.note}</td>
-                    <td className="px-3 py-1.5 text-slate-400">{a.createdBy}</td>
-                  </tr>
-                ),
-              )}
+              {photo.annotations.map((a) => (
+                <tr
+                  key={a.id}
+                  onClick={() => setActiveId(a.id)}
+                  className={cn(
+                    'cursor-pointer border-b border-slate-50 hover:bg-slate-50',
+                    a.id === activeId && 'bg-blue-50',
+                  )}
+                >
+                  <td className="px-3 py-1.5 font-medium text-slate-700">
+                    {a.componentRef ?? '—'}
+                  </td>
+                  <td className="px-3 py-1.5 text-slate-500">
+                    {(a.region.x * 100).toFixed(0)}%, {(a.region.y * 100).toFixed(0)}%
+                  </td>
+                  <td className="px-3 py-1.5 text-slate-600">{a.note}</td>
+                  <td className="px-3 py-1.5 text-slate-400">
+                    <span className="mr-2">{a.createdBy}</span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        deleteAnnotation.mutate(a.id)
+                      }}
+                      className="text-red-500 hover:underline"
+                    >
+                      删除
+                    </button>
+                  </td>
+                </tr>
+              ))}
             </tbody>
           </table>
           <p className="px-3 py-2 text-[10px] text-slate-400">
-            在左侧照片上「框选标注」即可新增一行
+            在左侧照片上「框选标注」即可新增一行，直接落库
           </p>
         </SectionCard>
 

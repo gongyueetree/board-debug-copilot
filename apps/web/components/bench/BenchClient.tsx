@@ -12,6 +12,7 @@ import {
 import { useMemo, useState } from 'react'
 import type { Measurements, Scenario } from '@app/contracts'
 import { needsConfirm, useBridge, type AwgRequest } from '@/lib/bridge'
+import { useAnalyzeCapture, useSaveCapture } from '@/lib/mutations'
 import { WiringGuide } from './WiringGuide'
 
 const PRESETS: { id: string; name: string; desc: string; awg: AwgRequest }[] = [
@@ -49,6 +50,9 @@ export function BenchClient({ projectId }: { projectId: string }) {
   const [preset, setPreset] = useState('gain')
   const [confirmFor, setConfirmFor] = useState<AwgRequest | null>(null)
   const [applied, setApplied] = useState<string>('')
+  const [saved, setSaved] = useState<string>('')
+  const saveCapture = useSaveCapture(projectId)
+  const analyzeCapture = useAnalyzeCapture(projectId)
 
   const m = bridge.measurements
   const wf = bridge.waveform
@@ -338,6 +342,52 @@ BRIDGE_MOCK=true uvicorn src.main:app --host 127.0.0.1 --port 3777`}
               <BenchAnalysis measurements={m} scenario={bridge.status.scenario} />
             ) : (
               <p className="text-xs text-slate-400">等待测量数据</p>
+            )}
+
+            {m && (
+              <div className="mt-3 space-y-1.5 border-t border-slate-100 pt-3">
+                <button
+                  type="button"
+                  disabled={saveCapture.isPending || analyzeCapture.isPending}
+                  onClick={() =>
+                    saveCapture.mutate(
+                      {
+                        label: `${bridge.status?.scenario ?? 'manual'} @ ${new Date().toLocaleTimeString('zh-CN', { hour12: false })}`,
+                        netName: 'VOUT_AMP',
+                        hardwareSetup: {
+                          scenario: bridge.status?.scenario,
+                          instrument: 'ADALM2000',
+                          awg,
+                        },
+                        measurements: m,
+                        // 原始数组进对象存储，不入库（硬性原则 #4）
+                        waveform: wf ? { ch1: wf.ch1, ch2: wf.ch2, fs: wf.fs } : undefined,
+                      },
+                      {
+                        onSuccess: (r) => {
+                          setSaved('已保存捕获，正在分析…')
+                          analyzeCapture.mutate(r.id, {
+                            onSuccess: (d) =>
+                              setSaved(
+                                `分析完成：${d.primaryCode ?? '无异常'}（置信度 ${Math.round(d.confidence * 100)}%）`,
+                              ),
+                            onError: (e) => setSaved(`分析失败：${e.message}`),
+                          })
+                        },
+                        onError: (e) => setSaved(`保存失败：${e.message}`),
+                      },
+                    )
+                  }
+                  className="w-full rounded-lg bg-brand py-2 text-xs font-medium text-white hover:bg-brand-hover disabled:opacity-50"
+                >
+                  {saveCapture.isPending
+                    ? '保存中…'
+                    : analyzeCapture.isPending
+                      ? '分析中…'
+                      : '保存捕获并分析'}
+                </button>
+                {saved && <p className="text-[10px] text-slate-500">{saved}</p>}
+              </div>
             )}
             <p className="mt-3 border-t border-slate-100 pt-2 text-[10px] text-slate-400">
               {AI_DISCLAIMER}
