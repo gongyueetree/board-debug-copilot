@@ -5,6 +5,7 @@
     "buildCommand": "corepack enable && pnpm install --frozen-lockfile && pnpm turbo build --filter=@app/api"
   },
   "deploy": {
+    "preDeployCommand": ["pnpm --filter @app/db exec prisma migrate deploy && pnpm --filter @app/db run seed"],
     "startCommand": "pnpm --filter @app/api run start",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 100,
