@@ -36,7 +36,8 @@ export class DeepSeekProvider implements LlmProvider {
         model: this.model,
         messages,
         temperature: opts?.temperature ?? 0.2,
-        max_tokens: opts?.maxTokens ?? 4096,
+        max_tokens: opts?.maxTokens ?? 8192,
+        ...(opts?.json ? { response_format: { type: 'json_object' } } : {}),
       },
       opts?.signal,
     )

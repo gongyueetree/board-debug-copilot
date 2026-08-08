@@ -16,6 +16,11 @@ export interface ChatOptions {
   maxTokens?: number
   /** 覆盖 provider 默认模型 */
   model?: string
+  /**
+   * 要求 provider 用原生 JSON 模式输出。
+   * 比在 prompt 里请求可靠得多：模型层面保证输出可解析，不会夹带解释文字。
+   */
+  json?: boolean
   /** 供 mock provider 查表，以及可观测性打点 */
   intent?: string
   scenario?: string

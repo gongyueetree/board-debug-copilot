@@ -25,7 +25,7 @@ export async function runStructured<S extends z.ZodTypeAny>(
 ): Promise<StructuredRunResult<z.infer<S>>> {
   let raw = ''
   try {
-    raw = await provider.chat(messages, opts)
+    raw = await provider.chat(messages, { ...opts, json: true })
   } catch (err) {
     return { ok: false, value: null, raw: '', repaired: false, error: (err as Error).message }
   }
@@ -52,7 +52,7 @@ export async function runStructured<S extends z.ZodTypeAny>(
           content: `上一次输出不符合 schema：${first.issues}\n请只输出修正后的完整 JSON，不要任何解释文字。`,
         },
       ],
-      { ...opts, temperature: 0 },
+      { ...opts, temperature: 0, json: true },
     )
     const second = attempt(repairedRaw)
     if (second.ok) {

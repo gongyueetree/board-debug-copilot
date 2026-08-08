@@ -31,16 +31,34 @@ function toGeminiBody(messages: ChatMessage[], opts?: ChatOptions) {
       : {}),
     generationConfig: {
       temperature: opts?.temperature ?? 0.2,
-      maxOutputTokens: opts?.maxTokens ?? 4096,
+      // 2.5 系列是思考模型，推理会消耗输出预算。4096 会让结构化输出在
+      // JSON 写完之前就被截断（表现为「括号不平衡」），所以给足额度。
+      maxOutputTokens: opts?.maxTokens ?? 16384,
+      ...(opts?.json ? { responseMimeType: 'application/json' } : {}),
+      // 结构化任务不需要长链推理，压低思考预算换取稳定与延迟
+      ...(opts?.json ? { thinkingConfig: { thinkingBudget: 512 } } : {}),
     },
   }
 }
 
 function extractText(payload: unknown): string {
-  const parts =
-    (payload as { candidates?: { content?: { parts?: { text?: string }[] } }[] }).candidates?.[0]
-      ?.content?.parts ?? []
-  return parts.map((p) => p.text ?? '').join('')
+  const cand = (payload as {
+    candidates?: {
+      content?: { parts?: { text?: string }[] }
+      finishReason?: string
+    }[]
+  }).candidates?.[0]
+
+  const text = (cand?.content?.parts ?? []).map((p) => p.text ?? '').join('')
+
+  // 截断必须显式报出来，否则上游只会看到「JSON 括号不平衡」这种误导性错误
+  if (cand?.finishReason === 'MAX_TOKENS') {
+    throw new Error(
+      `Gemini 输出被 maxOutputTokens 截断（已产出 ${text.length} 字符）。` +
+        '思考模型的推理会占用输出预算，请调大 maxTokens。',
+    )
+  }
+  return text
 }
 
 export class GeminiProvider implements LlmProvider {
@@ -125,7 +143,8 @@ export class GeminiProvider implements LlmProvider {
         contents: [{ role: 'user', parts }],
         generationConfig: {
           temperature: opts?.temperature ?? 0.2,
-          maxOutputTokens: opts?.maxTokens ?? 4096,
+          maxOutputTokens: opts?.maxTokens ?? 16384,
+          ...(opts?.json ? { responseMimeType: 'application/json' } : {}),
         },
       },
       opts?.signal,
