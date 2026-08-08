@@ -93,7 +93,7 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | P0 | monorepo 骨架 + Shell + /health + 三平台上线 | ✅ |
 | P1 | 数据库与 Seed + 只读端点 | ✅ |
 | P2 | 项目总览页 | ✅ |
-| P3 | 设计审查页 + 规则引擎 + AI 通道 | ⬜ |
+| P3 | 设计审查页 + 规则引擎 + AI 通道 | ✅ |
 | P4 | M2K Bridge + 调试工作台 | ⬜ |
 | P5 | PCB 照片页 | ⬜ |
 | P6 | 调试计划页 | ⬜ |

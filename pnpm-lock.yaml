@@ -32,6 +32,9 @@ importers:
       '@app/db':
         specifier: workspace:*
         version: link:../../packages/db
+      '@app/kicad':
+        specifier: workspace:*
+        version: link:../../packages/kicad
       '@nestjs/common':
         specifier: ^11.0.1
         version: 11.1.28(reflect-metadata@0.2.2)(rxjs@7.8.2)

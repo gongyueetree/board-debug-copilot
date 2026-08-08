@@ -1,17 +1,22 @@
-import { PagePlaceholder } from '@/components/PagePlaceholder'
+import { DesignClient } from '@/components/design/DesignClient'
+import { api } from '@/lib/api'
+import { prefetch } from '@/lib/server-fetch'
 
-export default function Page() {
+export const dynamic = 'force-dynamic'
+
+export default async function DesignPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params
+  const design = await prefetch(() => api.design(id))
+
   return (
-    <PagePlaceholder
-      title="设计审查"
-      phase="P3"
-      spec="docs/03 页面 2"
-      points={[
-        '左 260px 组件与筛选（类别复选树 + 已选组件详情卡）',
-        '中间原理图查看器（缩放平移、选中描边、网络高亮开关）',
-        '右 360px AI 设计审查面板（风险卡片流 + BOM/ERC 小结卡）',
-        'AI 通道：POST /ai/design-review 与 SSE /ai/chat，输出过 DesignReviewSchema',
-      ]}
-    />
+    <div className="mx-auto max-w-[1800px]">
+      <header className="mb-4">
+        <h1 className="text-xl font-semibold text-slate-900">设计审查</h1>
+        <p className="mt-1 text-sm text-slate-500">
+          规则引擎先于 AI 执行：确定性发现来自网表推导，AI 负责解释成因与排序
+        </p>
+      </header>
+      <DesignClient projectId={id} initial={design} />
+    </div>
   )
 }
