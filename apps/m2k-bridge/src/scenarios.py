@@ -111,19 +111,57 @@ def measure(ch1: np.ndarray, ch2: np.ndarray, sample_rate: float) -> dict:
 
     c1, c2 = channel(ch1), channel(ch2)
     gain = c2["vpp"] / c1["vpp"] if c1["vpp"] > 1e-6 else 0.0
-    # Inverting stage: measured phase sits near 180 degrees; the UI shows the
-    # deviation from that ideal (docs/05 section 8.4)
-    phase_deg = 176.8 if c2["vpp"] > 0.05 else 0.0
+    # 相位从波形里真算，不是常量。
+    #
+    # 这里原本写死 176.8 —— 对 mock 恰好是对的（合成波形里就带着 3.2° 滞后），
+    # 但接上真实硬件之后它会**永远显示 176.8**，无论实际相位是多少。
+    # 一个永远正确的数字和一个假的数字，在调试场景里是同一件事。
+    #
+    # CH2 幅度太小时不算：那时算出来的是噪声的相位，不是信号的。
+    phase_deg = _phase_diff_deg(ch1, ch2, sample_rate) if c2["vpp"] > 0.05 else 0.0
 
     return {
         "ch1": c1,
         "ch2": c2,
         "gain": round(gain, 3),
         "gainDb": round(20 * np.log10(gain), 2) if gain > 1e-6 else -80.0,
-        "phaseDeg": phase_deg,
-        "phaseDeviationDeg": round(phase_deg - 180.0, 1) if phase_deg else 0.0,
+        "phaseDeg": round(phase_deg, 1),
+        # 相对反相理想值（180°）的偏差，**要绕回 ±180 再算**。
+        # 直接相减的话，实测 -179°（等价 181°）会得到 -359° 这种数字 ——
+        # mock 的相位恒在 176.8 附近所以看不出来，真实硬件上相位稍过 180° 就会出现。
+        "phaseDeviationDeg": round(_wrap180(phase_deg - 180.0), 1) if phase_deg else 0.0,
         "note": "增益和相位基于基波（1.000 kHz）计算",
     }
+
+
+def _wrap180(deg: float) -> float:
+    """把角度绕回 (-180, 180]。"""
+    return (deg + 180.0) % 360.0 - 180.0
+
+
+def _phase_diff_deg(ch1: np.ndarray, ch2: np.ndarray, sample_rate: float) -> float:
+    """CH2 相对 CH1 的相位差，取 CH1 基波所在的那根谱线。
+
+    取同一根 bin 而不是各自的峰值：两个通道的峰值可能落在相邻 bin 上，
+    那样算出来的差会跳。反相放大器的结果在 ±180° 附近。
+    """
+    n = min(len(ch1), len(ch2))
+    if n < 8:
+        return 0.0
+    a1 = ch1[:n] - float(np.mean(ch1[:n]))
+    a2 = ch2[:n] - float(np.mean(ch2[:n]))
+    if np.max(np.abs(a1)) < 1e-4 or np.max(np.abs(a2)) < 1e-4:
+        return 0.0
+
+    win = np.hanning(n)
+    s1 = np.fft.rfft(a1 * win)
+    s2 = np.fft.rfft(a2 * win)
+    k = int(np.argmax(np.abs(s1)))
+    if k == 0:
+        return 0.0
+
+    # 归到 (-180, 180]，否则 179° 与 -181° 会被当成差了 360°
+    return _wrap180(float(np.degrees(np.angle(s2[k]) - np.angle(s1[k]))))
 
 
 def _dominant_freq(x: np.ndarray, sample_rate: float) -> float:

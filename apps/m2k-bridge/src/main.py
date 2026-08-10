@@ -131,6 +131,12 @@ class AwgRequest(BaseModel):
         )
 
 
+class MeasureRequest(BaseModel):
+    """一次性采集。samples 给大一点能测更低的频率，但耗时也更长。"""
+
+    samples: int = Field(default=2048, ge=64, le=65536)
+
+
 class ScopeRequest(BaseModel):
     timebaseSPerDiv: float = 0.0005
     sampleRate: float = Field(default=1_000_000.0, gt=0, le=SCOPE_MAX_RATE)
@@ -285,6 +291,58 @@ def configure_scope(req: ScopeRequest, _: None = Depends(require_token)) -> dict
         return adapter.configure_scope(req.to_config())
     except AdapterError as exc:
         raise _adapter_error(exc) from exc
+
+
+@app.post("/scope/measure")
+def measure_once(
+    req: MeasureRequest | None = None, _: None = Depends(require_token)
+) -> dict:
+    """采一帧并返回测量值，不返回波形数组。
+
+    这条是给**真机联调**准备的：验证数据通道通不通只需要几个数字，
+    而 WebSocket 需要一个 WS 客户端、网页需要整套栈起来 —— curl 就能干的事
+    不该逼人装东西。
+
+    不返回原始波形：一帧 2048 点两通道走 JSON 是几十 KB，而回答
+    「通了没有」只需要 Vpp、频率、增益。要看波形形状走 /ws。
+    """
+    body = req or MeasureRequest()
+    try:
+        frame = adapter.read_scope_frame(0, samples=body.samples) if _accepts_samples() else adapter.read_scope_frame(0)
+    except AdapterError as exc:
+        raise _adapter_error(exc) from exc
+
+    return {
+        "sampleRate": frame.sample_rate,
+        "samples": int(len(frame.ch1)),
+        # 请求值也报出来：mock adapter 固定 2048 点，忽略了请求。
+        # 不写出来的话，调用方会以为自己拿到的是 4096 点的频率分辨率。
+        "requestedSamples": body.samples,
+        "measurements": frame.measurements,
+    }
+
+
+def _accepts_samples() -> bool:
+    """mock adapter 的 read_scope_frame 没有 samples 参数，真实的有。"""
+    import inspect
+
+    try:
+        return "samples" in inspect.signature(adapter.read_scope_frame).parameters
+    except (TypeError, ValueError):  # pragma: no cover
+        return False
+
+
+@app.get("/diagnostics")
+def diagnostics(_: None = Depends(require_token)) -> dict:
+    """把「哪一步成了、哪一步没成」摊开。
+
+    真机排查时笼统的失败信息最费时间。真实适配器会记录每个可选 libm2k 调用
+    的成败、协商到的采样率、以及最近一次 AWG 的实际输出频率。
+    """
+    fn = getattr(adapter, "diagnostics", None)
+    if fn is None:
+        return {"adapter": adapter.name, "detail": "该适配器没有诊断信息（mock 不需要）"}
+    return {"adapter": adapter.name, **fn()}
 
 
 @app.post("/emergency-stop")

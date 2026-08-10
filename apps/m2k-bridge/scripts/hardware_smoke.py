@@ -181,24 +181,51 @@ def check_scope_config(b: Bridge) -> Check:
     return Check("配置示波器 1MSPS", ok, f"HTTP {status} {json.dumps(body, ensure_ascii=False)}")
 
 
-def check_waveform_guard(b: Bridge) -> list[Check]:
-    """未实现的波形必须显式报错，而不是静默按正弦推出去。"""
+def check_waveform_support(b: Bridge) -> list[Check]:
+    """五种波形都要能配上，且**回报的实际频率必须接近请求值**。
+
+    这是老实现最严重的缺陷：写死 75MSPS/1024 点，无论请求多少都输出
+    73.2kHz，接口还返回 200。所以这里不只看 HTTP 状态，要看 actualFreqHz。
+    """
     out: list[Check] = []
-    for wave in ("square", "triangle", "sawtooth"):
+    for wave in ("sine", "square", "triangle", "sawtooth", "dc"):
         status, payload = b.request(
             "POST",
             "/awg",
             {"channel": "W1", "wave": wave, "freqHz": 1000, "amplitudeVpp": 0.4, "offsetV": 0},
         )
-        ok = code_of(payload) == "WAVEFORM_UNSUPPORTED"
+        if status != 200 or not isinstance(payload, dict):
+            out.append(Check(f"{wave} 波形可配置", False, f"HTTP {status} code={code_of(payload)}"))
+            continue
+
+        if wave == "dc":
+            out.append(Check("dc 波形可配置", True, "HTTP 200（无频率概念）"))
+            continue
+
+        actual = payload.get("actualFreqHz")
+        err = payload.get("freqErrorPct")
+        ok = isinstance(actual, (int, float)) and abs(float(actual) - 1000.0) < 1.0
         out.append(
             Check(
-                f"{wave} 返回 WAVEFORM_UNSUPPORTED",
+                f"{wave} 实际频率 ≈ 请求值",
                 ok,
-                f"HTTP {status} code={code_of(payload)}"
-                + ("" if ok else " —— 静默按正弦输出是危险行为，检查是否有人去掉了拦截"),
+                f"请求 1000Hz → 实际 {actual}Hz 误差 {err}% "
+                f"(rate={payload.get('sampleRate')} N={payload.get('samples')} k={payload.get('cycles')})"
+                + ("" if ok else " —— 频率规划有问题，见 awg_plan.py"),
             )
         )
+
+    # 做不到的频率要显式报错，不能凑一个
+    status, payload = b.request(
+        "POST", "/awg", {"channel": "W1", "wave": "sine", "freqHz": 25_000_000, "amplitudeVpp": 0.4}
+    )
+    out.append(
+        Check(
+            "做不到的频率报 FREQ_UNREACHABLE",
+            code_of(payload) == "FREQ_UNREACHABLE",
+            f"HTTP {status} code={code_of(payload)}",
+        )
+    )
     return out
 
 
@@ -249,25 +276,68 @@ def check_limit_guards(b: Bridge) -> list[Check]:
 
 
 def check_loopback(b: Bridge) -> list[Check]:
-    """W1 -> CH1 直连。唯一能同时验 AWG 与 Scope 的自动化步骤。
+    """W1 → CH1 直连，**采一帧回来对比**。这才是「数据通道通了没有」的答案。
 
     只请求 0.4Vpp / 0 offset，和内置 Demo 的默认值一致。结束后一定 disable。
     """
     out: list[Check] = []
-    status, payload = b.request(
+    freq, vpp = 1000.0, 0.4
+
+    status, awg = b.request(
         "POST",
         "/awg",
-        {"channel": "W1", "wave": "sine", "freqHz": 1000, "amplitudeVpp": 0.4, "offsetV": 0},
+        {"channel": "W1", "wave": "sine", "freqHz": freq, "amplitudeVpp": vpp, "offsetV": 0},
     )
-    out.append(Check("W1 输出 0.4Vpp sine", status == 200, f"HTTP {status} {payload}"))
-    if status != 200:
+    ok = status == 200 and isinstance(awg, dict)
+    out.append(
+        Check(
+            "W1 输出 0.4Vpp/1kHz sine",
+            ok,
+            f"HTTP {status} 实际频率 {awg.get('actualFreqHz') if ok else '—'}Hz",
+        )
+    )
+    if not ok:
         return out
 
     try:
-        # 采集交给人工：这个脚本读不到波形（WS 客户端不在 stdlib 里），
-        # 它能保证的是「输出开了、又确实关掉了」
-        time.sleep(1.0)
-        print("\n  >>> 现在用独立示波器量 W1 与 CH1，把实测频率与幅度记进 docs/10 第 7 节")
+        status, _ = b.request("POST", "/scope", {"sampleRate": 1_000_000, "running": True})
+        out.append(Check("启动示波器", status == 200, f"HTTP {status}"))
+        time.sleep(0.5)
+
+        status, body = b.request("POST", "/scope/measure", {"samples": 4096})
+        if status != 200 or not isinstance(body, dict):
+            out.append(Check("采集一帧", False, f"HTTP {status} {body}"))
+            return out
+
+        m = body.get("measurements", {})
+        c1 = m.get("ch1", {})
+        got_vpp = float(c1.get("vpp", 0) or 0)
+        got_freq = float(c1.get("freqHz", 0) or 0)
+
+        out.append(
+            Check("采集一帧", True, f"{body.get('samples')} 点 @ {body.get('sampleRate')}Sa/s")
+        )
+        # ±20% 是宽松的：探头衰减、量程档位、接触电阻都会影响幅度。
+        # 这一步要回答的是「通道通不通」，精确标定是人工那一步的事。
+        out.append(
+            Check(
+                "CH1 测到幅度 ≈ W1 输出",
+                abs(got_vpp - vpp) <= vpp * 0.2,
+                f"输出 {vpp}Vpp → 测到 {got_vpp}Vpp"
+                + ("" if abs(got_vpp - vpp) <= vpp * 0.2 else " —— 量程档位或单位可能不对"),
+            )
+        )
+        out.append(
+            Check(
+                "CH1 测到频率 ≈ W1 输出",
+                abs(got_freq - freq) <= freq * 0.05,
+                f"输出 {freq}Hz → 测到 {got_freq}Hz"
+                + ("" if abs(got_freq - freq) <= freq * 0.05 else " —— 采样率或频率规划有问题"),
+            )
+        )
+
+        print("\n  >>> 同时用独立示波器量一下 W1，确认和上面的数字对得上")
+        print("  >>> 通道顺序、单位、空载噪声这几项脚本量不了，见 docs/10 §3")
         input("  >>> 记录完按回车，脚本会关闭输出：")
     finally:
         status, _ = b.request("POST", "/awg/disable")
@@ -323,7 +393,7 @@ def main() -> int:
             if devices:
                 checks.append(check_connect(bridge))
                 checks.append(check_scope_config(bridge))
-                checks.extend(check_waveform_guard(bridge))
+                checks.extend(check_waveform_support(bridge))
                 checks.extend(check_limit_guards(bridge))
                 if args.loopback:
                     print("\n  !! W1 会真实输出 0.4Vpp。确认 W1 已直连 CH1，且没接被测板卡。")
@@ -347,10 +417,19 @@ def main() -> int:
     failed = [c for c in checks if not c.ok]
     print(f"\n{len(checks) - len(failed)}/{len(checks)} 通过")
 
+    diag = None
+    if args.token:
+        try:
+            _, diag = bridge.request("GET", "/diagnostics")
+        except ConnectionError:
+            diag = None
+
     if args.report:
         report = {
             "base": args.base,
             "status": status_body,
+            # 每个可选 libm2k 调用的成败都在这里 —— 真机排查最有用的一列
+            "diagnostics": diag,
             "loopback": args.loopback,
             "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in checks],
             "passed": len(checks) - len(failed),
