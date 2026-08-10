@@ -1,4 +1,5 @@
 import { OverviewClient } from '@/components/overview/OverviewClient'
+import { DemoBanner } from '@/components/shell/DemoBanner'
 import { loadOverview } from '@/lib/server-fetch'
 
 export const dynamic = 'force-dynamic'
@@ -17,6 +18,7 @@ export default async function OverviewPage({ params }: { params: Promise<{ id: s
           </p>
         )}
       </header>
+      <DemoBanner projectId={id} isDemo={initial.project?.isDemo ?? false} />
       <OverviewClient projectId={id} initial={initial} />
     </div>
   )

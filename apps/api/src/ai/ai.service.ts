@@ -5,7 +5,6 @@ import {
   FindingSchema,
   ModelVisualFindingsSchema,
   InstrumentPresetSchema,
-  VisualFindingsSchema,
   requiresConfirm,
   type AgentIntent,
   type AiDiagnosis,

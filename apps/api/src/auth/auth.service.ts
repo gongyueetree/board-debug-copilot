@@ -1,4 +1,4 @@
-import { Injectable, Logger, UnauthorizedException } from '@nestjs/common'
+import { ForbiddenException, Injectable, Logger, UnauthorizedException } from '@nestjs/common'
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { PrismaService } from '../prisma/prisma.service'
 
@@ -81,17 +81,25 @@ export class AuthService {
   /**
    * 项目归属校验。
    *
-   * userId 为空的项目视为公共 demo，任何人可读写 —— 内置 Demo 必须在
-   * 未登录状态下也能完整演示（CLAUDE.md 内置 Demo 验收基准）。
+   * userId 为空的项目是公共 demo：任何人可读，但**任何人都不能写**。
+   * 早先的版本允许匿名写入，演示很方便，但任何访客都能污染所有人看到的
+   * 那份数据。想动手就先克隆一份到自己名下。
+   *
+   * 内置 Demo 的「未登录也能完整演示」由只读路径保证 —— 6 个页面全部可看。
    */
   async assertCanWrite(projectId: string, user: SessionUser | null): Promise<void> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
       select: { userId: true },
     })
-    if (!project || project.userId === null) return
-    if (!user || project.userId !== user.id) {
-      throw new UnauthorizedException('无权修改他人项目')
+    if (!project) return
+
+    if (project.userId === null) {
+      throw new ForbiddenException(
+        '公共 Demo 项目只读。点「复制到我的项目」克隆一份后即可修改。',
+      )
     }
+    if (!user) throw new UnauthorizedException('未登录或登录已过期')
+    if (project.userId !== user.id) throw new ForbiddenException('无权修改他人项目')
   }
 }

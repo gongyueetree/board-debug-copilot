@@ -23,7 +23,7 @@ export async function runStructured<S extends z.ZodTypeAny>(
   messages: ChatMessage[],
   opts?: ChatOptions,
 ): Promise<StructuredRunResult<z.infer<S>>> {
-  let raw = ''
+  let raw: string
   try {
     raw = await provider.chat(messages, { ...opts, json: true })
   } catch (err) {

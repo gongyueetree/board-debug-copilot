@@ -1,5 +1,4 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
-import { randomUUID } from 'node:crypto'
 import type { StepStatus } from '@app/contracts'
 import { PrismaService } from '../prisma/prisma.service'
 import { StorageService } from '../storage/storage.service'
@@ -220,6 +219,25 @@ export class MutationsService {
       },
     })
     return { id: s.id }
+  }
+
+  /** 标注与照片的归属查询，供 controller 鉴权用 */
+  async projectIdForPhoto(photoId: string): Promise<string> {
+    const p = await this.prisma.boardPhoto.findUnique({
+      where: { id: photoId },
+      select: { projectId: true },
+    })
+    if (!p) throw new NotFoundException(`照片不存在: ${photoId}`)
+    return p.projectId
+  }
+
+  async projectIdForAnnotation(id: string): Promise<string> {
+    const a = await this.prisma.photoAnnotation.findUnique({
+      where: { id },
+      select: { photo: { select: { projectId: true } } },
+    })
+    if (!a) throw new NotFoundException(`标注不存在: ${id}`)
+    return a.photo.projectId
   }
 
   private async assertProject(id: string) {

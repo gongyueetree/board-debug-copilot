@@ -1,0 +1,159 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# 同一分支只保留最新一次运行
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # 最快的一层：不需要数据库、不需要跑服务，PR 里几十秒出结果
+  unit:
+    name: 类型 / 构建 / 单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # 构建产物不该混进 src，也不该有源码被 .gitignore 误伤
+      - name: 检查源码目录整洁
+        run: pnpm check:tracked
+
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
+
+  bridge:
+    name: Bridge (pytest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: 安装依赖
+        working-directory: apps/m2k-bridge
+        run: |
+          pip install -r requirements.txt
+          pip install pytest httpx
+
+      # BRIDGE_CONFIG 指向临时文件，避免测试写到 runner 的 home
+      - name: pytest
+        working-directory: apps/m2k-bridge
+        env:
+          BRIDGE_MOCK: 'true'
+          BRIDGE_REQUIRE_PAIRING: 'true'
+        run: python -m pytest -q
+
+  integration:
+    name: 集成（冒烟 + 智能体评测）
+    runs-on: ubuntu-latest
+    needs: unit
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: bdc_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/bdc_ci?schema=public
+      # 集成层固定跑 mock：CI 不该消耗真实模型配额，也不该因为
+      # 外部服务抖动而变成不稳定测试
+      MOCK_MODE: 'true'
+      LLM_PROVIDER: mock
+      STORAGE_ADAPTER: mock
+      AUTH_SECRET: ci-secret
+      NEXT_PUBLIC_API_BASE_URL: http://127.0.0.1:3001
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      - name: 迁移与 seed
+        run: |
+          pnpm --filter @app/db exec prisma migrate deploy
+          pnpm db:seed
+
+      - name: 启动 api
+        run: |
+          node apps/api/dist/main.js > /tmp/api.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3001/health && break
+            sleep 1
+          done
+
+      - name: 启动 web
+        run: |
+          cd apps/web && pnpm exec next start --port 3000 > /tmp/web.log 2>&1 &
+          for i in $(seq 1 40); do
+            curl -sf http://127.0.0.1:3000/ && break
+            sleep 1
+          done
+
+      - name: 启动 bridge
+        run: |
+          cd apps/m2k-bridge
+          python -m venv .venv
+          .venv/bin/pip install -q -r requirements.txt
+          BRIDGE_MOCK=true BRIDGE_REQUIRE_PAIRING=false \
+            .venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 3777 > /tmp/bridge.log 2>&1 &
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3777/status && break
+            sleep 1
+          done
+
+      - name: 冒烟
+        env:
+          API: http://127.0.0.1:3001
+          WEB: http://127.0.0.1:3000
+          BRIDGE: http://127.0.0.1:3777
+        run: pnpm smoke
+
+      - name: 智能体评测（mock 基线）
+        env:
+          API: http://127.0.0.1:3001
+          BRIDGE: http://127.0.0.1:3777
+        run: pnpm test:agent
+
+      - name: 失败时导出日志
+        if: failure()
+        run: |
+          echo '--- api ---'; tail -50 /tmp/api.log || true
+          echo '--- web ---'; tail -30 /tmp/web.log || true
+          echo '--- bridge ---'; tail -30 /tmp/bridge.log || true

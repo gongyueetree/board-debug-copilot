@@ -17,6 +17,9 @@ export const ProjectSummarySchema = z.object({
   description: z.string().nullable(),
   status: ProjectStatusSchema,
   currentIssue: z.string().nullable(),
+  /** 公共 Demo（userId 为空）只读，前端据此显示克隆入口 */
+  isDemo: z.boolean().default(false),
+  designVersion: z.number().int().default(1),
   createdAt: z.string(),
   updatedAt: z.string(),
 })

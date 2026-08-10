@@ -8,7 +8,7 @@
     "start": "node dist/main.js",
     "clean": "rm -rf dist",
     "typecheck": "tsc --noEmit",
-    "lint": "echo \"no lint configured\""
+    "lint": "eslint src --max-warnings 20"
   },
   "dependencies": {
     "@app/ai": "workspace:*",

@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "turbo dev",
     "build": "turbo build",
-    "lint": "turbo lint",
+    "lint": "eslint apps packages scripts --max-warnings 50",
     "typecheck": "turbo typecheck",
     "clean": "turbo clean && rm -rf node_modules",
     "db:generate": "pnpm --filter @app/db exec prisma generate",
@@ -21,14 +21,20 @@
     "smoke": "tsx scripts/smoke.ts",
     "test:agent": "tsx scripts/eval-agent.ts",
     "check:tracked": "bash scripts/check-tracked.sh",
-    "job": "tsx --env-file-if-exists=.env scripts/enqueue-job.ts"
+    "job": "tsx --env-file-if-exists=.env scripts/enqueue-job.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.2",
+    "eslint": "^10.8.1",
     "prettier": "^3.4.2",
+    "tsx": "^4.19.2",
     "turbo": "^2.3.3",
     "typescript": "^5.7.2",
-    "tsx": "^4.19.2"
+    "typescript-eslint": "^8.66.0",
+    "vitest": "^4.1.10"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

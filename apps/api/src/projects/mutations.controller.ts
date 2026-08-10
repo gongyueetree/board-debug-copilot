@@ -3,6 +3,7 @@ import { StepStatusSchema } from '@app/contracts'
 import { z } from 'zod'
 import { AuthService } from '../auth/auth.service'
 import { bearer } from '../auth/auth.controller'
+import { CloneService } from './clone.service'
 import { MutationsService } from './mutations.service'
 import { ReportService } from './report.service'
 
@@ -19,7 +20,20 @@ export class MutationsController {
     private readonly mutations: MutationsService,
     private readonly reports: ReportService,
     private readonly auth: AuthService,
+    private readonly clone: CloneService,
   ) {}
+
+  /** 克隆项目到自己名下。公共 Demo 只读，动手前先克隆。 */
+  @Post('projects/:id/clone')
+  async cloneProject(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Headers('authorization') authorization?: string,
+  ) {
+    const user = await this.auth.verify(bearer(authorization))
+    const { name } = z.object({ name: z.string().max(120).optional() }).parse(body ?? {})
+    return this.clone.clone(id, user, name)
+  }
 
   /**
    * 写操作前的归属校验。userId 为空的项目是公共 demo，任何人可写 ——
@@ -50,7 +64,12 @@ export class MutationsController {
   }
 
   @Post('photos/:photoId/annotations')
-  createAnnotation(@Param('photoId') photoId: string, @Body() body: unknown) {
+  async createAnnotation(
+    @Param('photoId') photoId: string,
+    @Body() body: unknown,
+    @Headers('authorization') authorization?: string,
+  ) {
+    await this.guard(await this.mutations.projectIdForPhoto(photoId), authorization)
     const input = z
       .object({
         kind: z.enum(['component', 'solder', 'damage', 'question']),
@@ -64,7 +83,13 @@ export class MutationsController {
   }
 
   @Delete('annotations/:id')
-  deleteAnnotation(@Param('id') id: string) {
+  async deleteAnnotation(
+    @Param('id') id: string,
+    @Headers('authorization') authorization?: string,
+  ) {
+    // 之前这里没鉴权：任何人都能删公共 Demo 的标注
+    const projectId = await this.mutations.projectIdForAnnotation(id)
+    await this.guard(projectId, authorization)
     return this.mutations.deleteAnnotation(id)
   }
 

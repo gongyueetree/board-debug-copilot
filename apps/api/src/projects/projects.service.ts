@@ -39,6 +39,8 @@ export class ProjectsService {
       description: p.description,
       status: p.status,
       currentIssue: p.currentIssue,
+      isDemo: p.userId === null,
+      designVersion: p.designVersion,
       createdAt: iso(p.createdAt),
       updatedAt: iso(p.updatedAt),
     }))
@@ -86,6 +88,8 @@ export class ProjectsService {
       description: p.description,
       status: p.status,
       currentIssue: p.currentIssue,
+      isDemo: p.userId === null,
+      designVersion: p.designVersion,
       createdAt: iso(p.createdAt),
       updatedAt: iso(p.updatedAt),
       stats: {

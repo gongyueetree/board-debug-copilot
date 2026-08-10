@@ -133,7 +133,7 @@ export function useBridge() {
         if (msg.type === 'waveform') {
           setWaveform({ ch1: msg.ch1, ch2: msg.ch2, fs: msg.meta.fs })
         } else if (msg.type === 'measurements') {
-          const { type, ...m } = msg
+          const { ...m } = msg
           setMeasurements(m as Measurements)
         }
       } catch {

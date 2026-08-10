@@ -38,15 +38,6 @@ const ok = (cond: boolean, msg: string) => {
   if (!cond) throw new Error(msg)
 }
 
-const setScenario = async (s: string) => {
-  if (!BRIDGE) return
-  await fetch(`${BRIDGE}/debug/scenario`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ scenario: s }),
-  })
-}
-
 /** 按场景取对应的已落库捕获 */
 const captureFor = async (scenario: string) => {
   const caps = await get(`/projects/${PROJECT}/captures`)
