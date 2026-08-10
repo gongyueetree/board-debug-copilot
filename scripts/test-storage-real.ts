@@ -91,7 +91,8 @@ const checks: Check[] = [
       const pre = await s.createPresignedUpload({
         key,
         mimeType: 'application/zip',
-        maxBytes: LIMITS.zip.maxBytes,
+        // 确切长度：签的是这个数，传多传少都会被对象存储拒掉
+        sizeBytes: data.byteLength,
       })
       expect(pre.isFallback === false, 's3 模式不该返回 fallback')
       expect(pre.method === 'PUT', `直传方法应为 PUT，实得 ${pre.method}`)
@@ -108,7 +109,16 @@ const checks: Check[] = [
       const head = await s.head(key)
       expect(head !== null, '直传后 head 取不到对象')
       expect(head!.sizeBytes === data.byteLength, `head 大小 ${head!.sizeBytes} 与直传内容不符`)
-      return `直传 ${data.byteLength} 字节，head 校验通过`
+
+      // 声明多少就必须传多少：多传一个字节，签名就该对不上
+      const tamper = await fetch(pre.url, {
+        method: 'PUT',
+        headers: pre.headers,
+        body: new Uint8Array(Buffer.concat([data, Buffer.from([0])])),
+      })
+      expect(!tamper.ok, `多传一字节竟然成功了 HTTP ${tamper.status} —— 长度没被签进签名`)
+
+      return `直传 ${data.byteLength} 字节通过，超一字节被拒（HTTP ${tamper.status}）`
     },
   },
   {

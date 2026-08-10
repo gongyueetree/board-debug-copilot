@@ -1,5 +1,4 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
-import { LIMITS } from '@app/storage'
 import { parseKicadArchive } from '@app/kicad'
 import { PrismaService } from '../prisma/prisma.service'
 import { QueueService } from '../queue/queue.service'
@@ -46,7 +45,9 @@ export class KicadService {
     const presigned = await this.storage.presignUpload({
       key,
       mimeType: input.mimeType,
-      maxBytes: LIMITS.zip.maxBytes,
+      // 上一行已经用 LIMITS 校验过，这里签的是声明值本身：
+      // 传多传少都会被对象存储拒掉，字节落不了地
+      sizeBytes: input.sizeBytes,
     })
 
     return {

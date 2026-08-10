@@ -7,6 +7,7 @@ import {
   validateUpload,
   type FileKindKey,
   type ObjectHead,
+  type PresignInput,
   type PresignedUpload,
   type PutResult,
   type StorageAdapter,
@@ -76,11 +77,7 @@ export class StorageService {
     return this.adapter.getSignedReadUrl(key, expires)
   }
 
-  presignUpload(input: {
-    key: string
-    mimeType: string
-    maxBytes: number
-  }): Promise<PresignedUpload> {
+  presignUpload(input: PresignInput): Promise<PresignedUpload> {
     return this.adapter.createPresignedUpload(input)
   }
 

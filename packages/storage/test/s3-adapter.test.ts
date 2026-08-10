@@ -163,17 +163,18 @@ describe('S3Storage 对真实 HTTP 端点', () => {
   it('直传 URL 能被 PUT，且服务端只用 head 就能校验', async () => {
     const s = storage()
     const key = 'projects/p1/kicad/direct.zip'
+    const data = Buffer.alloc(8192, 3)
+
     const pre = await s.createPresignedUpload({
       key,
       mimeType: 'application/zip',
-      maxBytes: LIMITS.zip.maxBytes,
+      sizeBytes: data.byteLength,
     })
 
     expect(pre.isFallback).toBe(false)
     expect(pre.method).toBe('PUT')
     expect(pre.objectKey).toBe(key)
 
-    const data = Buffer.alloc(8192, 3)
     const res = await fetch(pre.url, {
       method: 'PUT',
       headers: pre.headers,
@@ -185,13 +186,17 @@ describe('S3Storage 对真实 HTTP 端点', () => {
     expect(await s.head(key)).toEqual({ sizeBytes: 8192, mimeType: 'application/zip' })
   })
 
-  it('直传签名把长度上限写进去，超限在对象存储侧就该被拒', async () => {
+  it('签的是确切长度而不是上限', async () => {
+    // 签上限的话，任何一次真实上传的 content-length 都对不上签名。
+    // 这个假服务不校验签名，所以这条只能断言 URL 里的值 ——
+    // 真校验由 CI 的 MinIO job 做（SignatureDoesNotMatch 就是那么发现的）。
     const pre = await storage().createPresignedUpload({
       key: 'projects/p1/kicad/limited.zip',
       mimeType: 'application/zip',
-      maxBytes: LIMITS.zip.maxBytes,
+      sizeBytes: 1234,
     })
-    // content-length 进了 SignedHeaders，篡改它签名就对不上
-    expect(decodeURIComponent(pre.url)).toContain('content-length')
+    const url = decodeURIComponent(pre.url)
+    expect(url).toContain('content-length')
+    expect(url).not.toContain(String(LIMITS.zip.maxBytes))
   })
 })

@@ -141,12 +141,21 @@ export interface StorageAdapter {
   head(key: string): Promise<ObjectHead | null>
   delete(key: string): Promise<void>
   getSignedReadUrl(key: string, expiresSeconds?: number): Promise<string | null>
-  createPresignedUpload(input: {
-    key: string
-    mimeType: string
-    maxBytes: number
-    expiresSeconds?: number
-  }): Promise<PresignedUpload>
+  createPresignedUpload(input: PresignInput): Promise<PresignedUpload>
+}
+
+export interface PresignInput {
+  key: string
+  mimeType: string
+  /**
+   * 客户端声明的**确切**字节数，调用方必须先用 validateUpload 校验过。
+   *
+   * 不是上限：它会被签进 content-length，上传时必须一字节不差。
+   * 早先签的是 LIMITS 里的上限，于是任何一次真实上传的 content-length
+   * 都对不上签名 —— MinIO 直接回 SignatureDoesNotMatch。
+   */
+  sizeBytes: number
+  expiresSeconds?: number
 }
 
 /** 大小与 MIME 校验，两种 adapter 共用 */
@@ -221,7 +230,7 @@ export class MockStorage implements StorageAdapter {
     return `${this.publicBase}/api/v1/files/${encodeURIComponent(key)}`
   }
 
-  async createPresignedUpload(input: { key: string; mimeType: string }): Promise<PresignedUpload> {
+  async createPresignedUpload(input: PresignInput): Promise<PresignedUpload> {
     return {
       url: `${this.publicBase}/api/v1/files/upload-fallback`,
       objectKey: input.key,
@@ -340,13 +349,15 @@ export class S3Storage implements StorageAdapter {
   /**
    * 直传 URL。浏览器直接 PUT 到对象存储，不经过 api ——
    * 100MB 的 zip 走 base64 过一遍 Node 进程是明确要避免的方案。
+   *
+   * 大小怎么防：把客户端声明的确切字节数签进 content-length。传多传少都会被
+   * 对象存储以 SignatureDoesNotMatch 拒掉，字节根本落不了地。声明值本身由
+   * 调用方先过 validateUpload。
+   *
+   * 这不是唯一一道：completeUpload 还会 head 一次，按真实大小复核并删掉超限对象。
+   * 两道都要留 —— 签名这道防的是「传超了」，head 那道防的是「签的时候就撒谎」。
    */
-  async createPresignedUpload(input: {
-    key: string
-    mimeType: string
-    maxBytes: number
-    expiresSeconds?: number
-  }): Promise<PresignedUpload> {
+  async createPresignedUpload(input: PresignInput): Promise<PresignedUpload> {
     const { client, mod } = await this.sdk()
     const { getSignedUrl } = await import('@aws-sdk/s3-request-presigner')
     const expiresInSeconds = input.expiresSeconds ?? 900
@@ -357,8 +368,8 @@ export class S3Storage implements StorageAdapter {
         Bucket: this.config.bucket,
         Key: input.key,
         ContentType: input.mimeType,
-        // 签名里带上长度上限，超限的请求在对象存储侧就会被拒
-        ContentLength: input.maxBytes,
+        // 确切长度，不是上限 —— 见上面的注释
+        ContentLength: input.sizeBytes,
       }),
       { expiresIn: expiresInSeconds },
     )

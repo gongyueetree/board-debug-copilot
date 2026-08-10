@@ -51,7 +51,8 @@ S3_FORCE_PATH_STYLE=true \
 2. `head` 不存在的 key 返回 `null` 而不是抛错
 3. `get`：二进制内容逐字节一致
 4. `getSignedReadUrl`：签名 URL 能真的取到对象
-5. `createPresignedUpload`：直传 PUT 成功后，服务端**只 head 就能校验**
+5. `createPresignedUpload`：直传 PUT 成功后，服务端**只 head 就能校验**；
+   且多传一个字节会被对象存储以 `SignatureDoesNotMatch` 拒掉
 6. 超限对象被拒绝**并从存储里删掉**
 7. `delete` 之后 `head` 与 `get` 都取不到
 
@@ -171,6 +172,24 @@ S3_FORCE_PATH_STYLE=false
    归属校验（公共 Demo 可读，私有项目要 token），但它是给本地开发和内置 Demo
    用的，不是设计成生产授权层的 —— 它没有签名有效期、没有速率限制、
    缓存策略也由应用自己拍。
+
+### 直传的大小限制怎么落地
+
+presigned PUT 没法表达「不超过 N 字节」——签名要么把 `content-length` 签死，
+要么不签。所以走两道：
+
+1. **签确切长度。** `presignUpload` 拿到客户端声明的 `sizeBytes`，先用
+   `LIMITS` 校验，然后把这个确切值签进 `content-length`。传多传少都会在
+   对象存储侧被拒，字节根本落不了地。
+2. **完成时 head 复核。** `completeUpload` 用 `head()` 拿真实大小再校验一次，
+   超限就把对象删掉。
+
+两道防的是不同的事：第一道防「传超了」，第二道防「签的时候就撒谎」。
+
+> 早先第一道签的是 `LIMITS.zip.maxBytes`（上限而不是确切值），于是任何一次
+> 真实上传的 content-length 都对不上签名 —— MinIO 直接回 `SignatureDoesNotMatch`。
+> 进程内的假 S3 服务不校验签名，没发现；CI 的 MinIO job 第一次跑就抓到了。
+> 这就是为什么假服务替代不了真 MinIO。
 
 ### 硬校验
 
