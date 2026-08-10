@@ -2,6 +2,12 @@
 
 关系不可改，字段可细化。波形原始数组不入库（存对象存储，`Capture.waveformObjectKey` 引用）。
 
+> **纪律更新（P9 起）**：「关系不可改」是 P0–P8 的冻结约定。从 P9 起改为：
+> **先改本文档，再改 schema，再写迁移，三者同一个 commit。** 禁止只改 schema
+> 不改文档 —— 文档与 schema 漂移之后，这份文档就从「权威定义」退化成「历史记录」。
+>
+> P9 只加列加表，不动任何既有关系。P11 / P12 会真正改关系，届时按上面的顺序走。
+
 ```prisma
 generator client { provider = "prisma-client-js" }
 datasource db { provider = "postgresql"; url = env("DATABASE_URL") }
@@ -11,6 +17,13 @@ enum FileKind { KICAD_ZIP KICAD_PROJECT SCHEMATIC PCB BOM NETLIST ERC_REPORT DRC
 enum CaptureKind { OSCILLOSCOPE FFT BODE LOGIC DMM POWER }
 enum DiagnosisSeverity { INFO WARNING CRITICAL }
 enum StepStatus { PENDING IN_PROGRESS COMPLETED FAILED SKIPPED }
+
+// ── P9 器件库 ─────────────────────────────────────────────────
+enum PartCategory { OPAMP LDO DCDC ADC DAC MCU FPGA MEMORY RESISTOR CAPACITOR INDUCTOR
+                    DIODE LED MOSFET BJT CRYSTAL CONNECTOR SENSOR TRANSCEIVER OTHER }
+enum PartLifecycle { ACTIVE NRND EOL OBSOLETE UNKNOWN }
+enum MatchMethod   { EXACT PREFIX PARAMETRIC VECTOR MANUAL }
+enum MatchStatus   { UNMATCHED MATCHED NEEDS_REVIEW REJECTED }
 
 model User {
   id String @id @default(uuid())
@@ -70,7 +83,10 @@ model Component {
   datasheetUrl String?
   x Float?  y Float?  rotation Float?  side String?
   rawJson Json?
+  partId String?                              // P9：匹配到的器件库条目
+  matchStatus MatchStatus @default(UNMATCHED) // P9：由确定性层写入，不靠 prompt
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  part Part? @relation(fields: [partId], references: [id])
   pins Pin[]
   bomMatches PartMatch[]
   testPoints TestPoint[]
@@ -121,12 +137,55 @@ model TestPoint {
 model PartMatch {
   id String @id @default(uuid())
   componentId String
-  source String              // MOCK / REAL_DB
+  source String              // MOCK / REAL_DB —— 保留做历史数据兼容
   externalPartId String?
   matchedPartNumber String?
   confidence Float?
   summaryJson Json?
+  method MatchMethod @default(EXACT)   // P9：命中在第几层
+  accepted Boolean @default(false)     // P9：confidence < 0.6 时为 false，等人确认
+  reviewedBy String?                   // P9：人工确认者
+  reviewedAt DateTime?
   component Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
+}
+
+// ── P9 器件库镜像 ─────────────────────────────────────────────
+// 只镜像「项目真正用到的」+ 预热脚本拉的高频器件。110 万条不全量导入：
+// 没必要也难维护，而且全量导入之后 TTL 刷新会变成一个独立的运维负担。
+model Part {
+  id String @id @default(uuid())
+  mpn String @unique          // 归一化后（大写、去分隔符）
+  rawMpn String               // 原始串，展示用
+  manufacturer String?
+  category PartCategory @default(OTHER)
+  description String?
+  packageCase String?
+  datasheetUrl String?
+  lifecycle PartLifecycle @default(UNKNOWN)
+  rohs Boolean?
+  paramsJson Json @default("{}")   // 含 __meta.complete / missing / parser
+  commercialJson Json?             // 价格库存，与 params 分离，不进 prompt
+  sourceProvider String
+  sourceId String?
+  fetchedAt DateTime @default(now())
+  expiresAt DateTime?              // TTL；过期后异步刷新，先返回旧值
+  components Component[]
+  alternates PartAlternate[] @relation("PartAlternates")
+  knowledge PartKnowledge?
+  @@index([category])
+  @@index([manufacturer])
+  @@index([expiresAt])
+}
+
+model PartAlternate {
+  id String @id @default(uuid())
+  partId String
+  altMpn String
+  kind String                 // PIN2PIN / FUNCTIONAL / UPGRADE
+  confidence Float
+  reason String?
+  part Part @relation("PartAlternates", fields: [partId], references: [id], onDelete: Cascade)
+  @@unique([partId, altMpn])
 }
 
 model RuleViolation {

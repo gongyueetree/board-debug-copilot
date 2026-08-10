@@ -9,6 +9,11 @@
 - `docs/03-ui-spec.md` — 6 个页面的 UI 规格（对齐已确认的效果图）
 - `docs/04-deploy.md` — Vercel/Railway 部署与环境变量
 - `docs/05-agent-design.md` — 智能体设计（packages/ai 实施规格：路由/上下文/工具/输出 schema/守卫/流式/评测）
+- `docs/07-operations.md` — 运维手册：mock/real 边界表、队列、存储、Bridge 配对
+- `docs/08-real-kicad-validation.md` — 真实 KiCad 工程验证（fixture + 已验证版本）
+- `docs/09-storage-validation.md` — 对象存储验证（MinIO / R2 / S3）
+- `docs/10-adalm2000-hardware-validation.md` — ADALM2000 实机验证 checklist
+- `docs/11-parts-database.md` — 器件库接入契约、字段映射、限流与降级
 - `docs/07-operations.md` — 运维手册：mock/real 边界、异步任务、对象存储、KiCad 解析、Bridge 配对、生产注意事项
 
 ## 技术栈（已定，不要更换）
@@ -54,6 +59,7 @@ board-debug-copilot/
 ├── packages/contracts# Zod DTO/schema（前后端共享）
 ├── packages/ai       # providers/agents/prompts/tools
 ├── packages/kicad    # parser/cli/graph
+├── packages/parts    # 器件库 adapter（api 与 worker 共用）
 ├── packages/ui       # 共享组件
 ├── packages/storage  # 对象存储 adapter（api 与 worker 共用）
 └── packages/instrument-protocol  # Bridge 消息契约

@@ -16,7 +16,7 @@
 | 对象存储 | 本地盘，无盘退内存 | S3 / R2 / MinIO | `STORAGE_ADAPTER=s3` | ✅ MinIO 在 CI 每次跑通；R2/AWS 未验证，见 docs/09 |
 | KiCad 解析 | 只解析包内 netlist | kicad-cli 全流程 | 装 KiCad 9 并让 `kicad-cli` 在 PATH | ⚠️ CLI 分支用假 CLI 覆盖；真实 KiCad 见 docs/08 |
 | ADALM2000 | numpy 合成波形 | libm2k | `BRIDGE_MOCK=false` | ❌ **实验性，未接真实硬件验证**（见 §5） |
-| 元器件库 | 内置常识参数 | 真实器件库 | 换 `PartsDatabaseAdapter` | ❌ 未接入 |
+| 元器件库 | 内置常识参数 | 110 万器件库 API | `PARTS_PROVIDER=remote` | ⬜ **NOT RUN** — adapter 已就位，接入信息未提供，见 docs/11 |
 | 队列 | 无 Redis 时同步兜底 | BullMQ | 配 `REDIS_URL` | ✅ 两条路径都验证过 |
 
 降级从不静默：`GET /health` 会报出 `llm.degraded` 与 `storage.degraded`，

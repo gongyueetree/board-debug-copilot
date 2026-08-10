@@ -15,9 +15,10 @@
     "@app/contracts": "workspace:*",
     "@app/db": "workspace:*",
     "@app/kicad": "workspace:*",
+    "@app/parts": "workspace:*",
+    "@app/storage": "workspace:*",
     "bullmq": "^5.34.6",
-    "ioredis": "^5.4.2",
-    "@app/storage": "workspace:*"
+    "ioredis": "^5.4.2"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

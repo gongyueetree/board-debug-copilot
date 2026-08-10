@@ -49,6 +49,54 @@ enum DiagnosisSeverity {
   CRITICAL
 }
 
+// ── P9 器件库 ─────────────────────────────────────────────────
+// 与 packages/parts/src/types.ts 的 PART_CATEGORIES 一一对应，改一边必须改另一边。
+enum PartCategory {
+  OPAMP
+  LDO
+  DCDC
+  ADC
+  DAC
+  MCU
+  FPGA
+  MEMORY
+  RESISTOR
+  CAPACITOR
+  INDUCTOR
+  DIODE
+  LED
+  MOSFET
+  BJT
+  CRYSTAL
+  CONNECTOR
+  SENSOR
+  TRANSCEIVER
+  OTHER
+}
+
+enum PartLifecycle {
+  ACTIVE
+  NRND
+  EOL
+  OBSOLETE
+  UNKNOWN
+}
+
+enum MatchMethod {
+  EXACT
+  PREFIX
+  PARAMETRIC
+  VECTOR
+  MANUAL
+}
+
+enum MatchStatus {
+  UNMATCHED
+  MATCHED
+  NEEDS_REVIEW
+  REJECTED
+}
+
 enum StepStatus {
   PENDING
   IN_PROGRESS
@@ -58,26 +106,26 @@ enum StepStatus {
 }
 
 model User {
-  id        String   @id @default(uuid())
-  email     String?  @unique
+  id        String    @id @default(uuid())
+  email     String?   @unique
   name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
   projects  Project[]
 }
 
 model Project {
-  id           String        @id @default(uuid())
-  userId       String?
-  name         String
-  description  String?
-  status       ProjectStatus @default(CREATED)
-  currentIssue String?
+  id            String        @id @default(uuid())
+  userId        String?
+  name          String
+  description   String?
+  status        ProjectStatus @default(CREATED)
+  currentIssue  String?
   /// 设计版本号，每次成功解析 KiCad 工程 +1。
   /// 捕获保存时记录当时的版本，不一致则 UI 提示来自旧设计。
-  designVersion Int          @default(1)
-  createdAt    DateTime      @default(now())
-  updatedAt    DateTime      @updatedAt
+  designVersion Int           @default(1)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
 
   user       User?           @relation(fields: [userId], references: [id])
   files      ProjectFile[]
@@ -126,7 +174,13 @@ model Component {
   side         String?
   rawJson      Json?
 
+  /// P9：匹配到的器件库条目。null = 还没匹配上，不代表器件不存在
+  partId      String?
+  /// P9：由确定性层写入（confidence < 0.6 → NEEDS_REVIEW），不靠 prompt
+  matchStatus MatchStatus @default(UNMATCHED)
+
   project          Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  part             Part?             @relation(fields: [partId], references: [id])
   pins             Pin[]
   bomMatches       PartMatch[]
   testPoints       TestPoint[]
@@ -192,15 +246,76 @@ model TestPoint {
 model PartMatch {
   id                String  @id @default(uuid())
   componentId       String
+  /// MOCK / REAL_DB —— 保留做历史数据兼容，新代码看 method
   source            String
   externalPartId    String?
   matchedPartNumber String?
   confidence        Float?
   summaryJson       Json?
 
+  /// P9：命中在四层管线的哪一层
+  method     MatchMethod @default(EXACT)
+  /// P9：confidence < 0.6 时为 false，等人确认。
+  /// 自动采纳低置信匹配是这类系统最典型的翻车方式 —— 一个错误的 vsAbsMax
+  /// 会让 AI 得出看起来极其笃定的错误根因，而没人会去质疑它。
+  accepted   Boolean     @default(false)
+  reviewedBy String?
+  reviewedAt DateTime?
+
   component Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
 
   @@index([componentId])
+}
+
+/// P9：器件库镜像。
+///
+/// 只镜像「项目真正用到的」+ 预热脚本拉的高频器件 —— 110 万条不全量导入：
+/// 没必要也难维护，全量之后 TTL 刷新会变成一个独立的运维负担。
+model Part {
+  id             String        @id @default(uuid())
+  /// 归一化后（大写、去分隔符），主键也是幂等键
+  mpn            String        @unique
+  /// 原始串，展示用
+  rawMpn         String
+  manufacturer   String?
+  category       PartCategory  @default(OTHER)
+  description    String?
+  packageCase    String?
+  datasheetUrl   String?
+  lifecycle      PartLifecycle @default(UNKNOWN)
+  rohs           Boolean?
+  /// 含 __meta.complete / missing / parser —— 抽不到的参数必须显形
+  paramsJson     Json          @default("{}")
+  /// 价格与库存。与 params 严格分离：它们对根因推断零贡献，却会挤占
+  /// docs/05 §4.3 定死的 token 预算，所以 DesignDigest 一刀切掉这一段。
+  commercialJson Json?
+  sourceProvider String
+  sourceId       String?
+  fetchedAt      DateTime      @default(now())
+  /// TTL；过期后异步刷新，先返回旧值不阻塞
+  expiresAt      DateTime?
+
+  components Component[]
+  alternates PartAlternate[] @relation("PartAlternates")
+  knowledge  PartKnowledge?
+
+  @@index([category])
+  @@index([manufacturer])
+  @@index([expiresAt])
+}
+
+model PartAlternate {
+  id         String  @id @default(uuid())
+  partId     String
+  altMpn     String
+  /// PIN2PIN / FUNCTIONAL / UPGRADE
+  kind       String
+  confidence Float
+  reason     String?
+
+  part Part @relation("PartAlternates", fields: [partId], references: [id], onDelete: Cascade)
+
+  @@unique([partId, altMpn])
 }
 
 model RuleViolation {
@@ -275,17 +390,17 @@ model VisualFinding {
 }
 
 model Capture {
-  id                  String      @id @default(uuid())
-  projectId           String
-  netId               String?
-  kind                CaptureKind
-  label               String?
-  hardwareSetupJson   Json
-  measurementsJson    Json
-  waveformObjectKey   String?
-  thumbnailObjectKey  String?
-  createdAt           DateTime    @default(now())
-  debugStepId         String?
+  id                 String      @id @default(uuid())
+  projectId          String
+  netId              String?
+  kind               CaptureKind
+  label              String?
+  hardwareSetupJson  Json
+  measurementsJson   Json
+  waveformObjectKey  String?
+  thumbnailObjectKey String?
+  createdAt          DateTime    @default(now())
+  debugStepId        String?
 
   project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
   net       Net?         @relation(fields: [netId], references: [id])
@@ -376,18 +491,26 @@ model DebugReport {
 /// 必须写进 schema —— 否则 `migrate diff` 每次都会生成 DROP TABLE，
 /// 因为它看不到这张由原始 SQL 迁移建出来的表。
 model PartKnowledge {
-  id           String   @id @default(uuid())
-  partNumber   String   @unique
+  id           String                      @id @default(uuid())
+  partNumber   String                      @unique
   manufacturer String?
   category     String
   summary      String
-  paramsJson   Json     @default("{}")
-  source       String   @default("BUILTIN")
+  paramsJson   Json                        @default("{}")
+  source       String                      @default("BUILTIN")
   embedding    Unsupported("vector(768)")?
-  createdAt    DateTime @default(now())
+  createdAt    DateTime                    @default(now())
 
-  @@index([category])
+  /// P9：挂到镜像条目上。可空 —— 内置常识库的条目没有对应 Part
+  partId         String? @unique
+  /// 哪个模型生成的向量；换模型后旧向量不可比，靠它识别需要重算的行
+  embeddingModel String?
+  version        Int     @default(1)
+
+  part Part? @relation(fields: [partId], references: [id])
   // 注意：embedding 上的 HNSW 索引由原始 SQL 迁移创建，Prisma 表达不了向量索引。
   // 因此 `migrate diff` 会一直提示 DROP INDEX PartKnowledge_embedding_idx —— 忽略它，
   // 不要把该语句写进迁移文件。
+
+  @@index([category])
 }
