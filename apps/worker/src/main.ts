@@ -9,6 +9,7 @@
  * （CLAUDE.md 硬性原则 #1：每个 Phase 结束 pnpm dev 必须能启动）。
  */
 import { JOB_PAYLOAD_SCHEMAS, JobTypeSchema, QUEUE_NAME, type JobResult } from '@app/contracts'
+import { assertStorageUsable, describeStorage } from '@app/storage'
 import { disconnect, prisma, type JobContext } from './context'
 import { aiLongTaskProcessor } from './processors/ai-long-task.processor'
 import { kicadParseProcessor } from './processors/kicad-parse.processor'
@@ -65,6 +66,17 @@ async function dispatch(name: string, payload: unknown): Promise<JobResult> {
 export { dispatch }
 
 async function main() {
+  // worker 写的产物（SVG、netlist、报告）和 api 落在同一个桶里，
+  // 生产上用 mock 存储同样意味着数据会消失。同一条规则，同一个开关。
+  const storage = describeStorage()
+  try {
+    assertStorageUsable()
+  } catch (err) {
+    log((err as Error).message)
+    process.exit(1)
+  }
+  if (storage.degraded) log(`存储降级：${storage.reason ?? '未知原因'}（adapter=${storage.adapter}）`)
+
   const redisUrl = process.env.REDIS_URL
 
   if (!redisUrl) {

@@ -157,8 +157,11 @@ export async function parseProject(
       ['pcb', 'drc', '--format', 'json', '--output', 'drc.json', files.pcb],
       'drcReportPath',
     )
-    await attempt('pcb-svg', ['pcb', 'export', 'svg', '--output', 'pcb-svg', files.pcb])
-    artifacts.pcbSvgPaths = await collectSvgs('pcb-svg')
+    // 带 .svg 后缀：pcb export svg 的 --output 是文件名，不写后缀 KiCad 会
+    // 老老实实产出一个叫 `pcb-svg` 的无后缀文件，然后被 SVG 过滤器漏掉。
+    // 某些版本按层导出时又会把它当目录 —— collectSvgs 两种都认。
+    await attempt('pcb-svg', ['pcb', 'export', 'svg', '--output', 'pcb.svg', files.pcb])
+    artifacts.pcbSvgPaths = await collectSvgs('pcb.svg')
     steps.push({
       name: 'pcb-svg-collect',
       ok: true,

@@ -63,8 +63,28 @@ S3_SECRET_ACCESS_KEY=
 S3_FORCE_PATH_STYLE=true                                    # R2/MinIO true，AWS false
 ```
 
-配置不全会自动降级为 mock 并在 `/health` 的 `storage.degraded` 标出来 ——
-不会因为少一个变量就起不来，但也不会静默。
+### ⚠️ 生产不允许 mock 存储
+
+`NODE_ENV=production` + 实际生效的 adapter 是 mock + 没有显式豁免 →
+**api 与 worker 拒绝启动**，日志第一行就是该配什么。
+
+配置不全（比如少填 `S3_BUCKET`）会降级为 mock —— 在开发环境只是
+`/health` 的 `storage.degraded=true`，在生产环境就是启动失败。
+
+内置 Demo 这种明知故犯的场景用显式豁免：
+
+```env
+ALLOW_MOCK_STORAGE_IN_PRODUCTION=true
+```
+
+豁免后能启动，但 `storage.degraded` 仍是 `true`。
+
+> **已经部署过的服务注意**：这条校验是后加的。如果 Railway 上的 api / worker
+> 目前跑在 `NODE_ENV=production` 且没配 S3，**下一次部署会起不来** ——
+> 二选一：配好上面那组 `S3_*`，或者先加 `ALLOW_MOCK_STORAGE_IN_PRODUCTION=true`。
+
+验证真实存储：`pnpm test:storage-real`（本地 MinIO 一条命令起，见
+`docs/09-storage-validation.md`）。
 
 完整运维说明见 `docs/07-operations.md`。
 
@@ -77,6 +97,8 @@ S3_FORCE_PATH_STYLE=true                                    # R2/MinIO true，AW
 - `AUTH_SECRET` 生产必配，否则每次重启登录态全失效
 - `REDIS_URL` 生产必配，否则大工程解析在请求里同步跑会被网关超时掐断
 - `BRIDGE_REQUIRE_PAIRING` 不要在生产关掉
+- `BRIDGE_ALLOW_UNPAIRED_DEBUG` 同理，只给 CI 与内置 Demo；开着时调试工作台会显示警示条
+- `STORAGE_ADAPTER=mock` 在 `NODE_ENV=production` 下会直接拒绝启动，见上
 
 ## 本地开发
 ```

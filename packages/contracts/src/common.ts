@@ -42,7 +42,8 @@ export const VisualSeveritySchema = z.enum(['高风险', '中风险', '低风险
 export type VisualSeverity = z.infer<typeof VisualSeveritySchema>
 
 export const HealthResponseSchema = z.object({
-  status: z.literal('ok'),
+  /** unhealthy：进程起来了但配置不该上生产（目前只有 mock 存储会触发） */
+  status: z.enum(['ok', 'unhealthy']),
   service: z.string(),
   version: z.string(),
   mockMode: z.boolean(),

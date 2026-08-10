@@ -144,7 +144,21 @@ API=https://api-production-bc7f.up.railway.app WEB=https://board-debug-copilot.v
 带上本地 Bridge 一起查：加 `BRIDGE=http://127.0.0.1:3777`。
 
 检查覆盖全部 API 端点、6 个页面的 SSR 关键内容、规则引擎是否检出两条关键设计缺陷、
-SSE 事件是否成流、Bridge 的危险操作是否被拦。
+SSE 事件是否成流、Bridge 的危险操作是否被拦，以及写操作鉴权的运行时行为
+（未登录不能写公共 Demo、克隆后能写自己的、不能写别人的）。
+
+## 逐步接入真实依赖
+
+这三条默认都会 SKIPPED，装了对应依赖才真正跑起来：
+
+```bash
+pnpm test:kicad-real     # 真实 KiCad 工程解析，需要 kicad-cli   → docs/08
+pnpm test:storage-real   # 真实 S3 兼容存储，需要 MinIO/R2/S3    → docs/09
+cd apps/m2k-bridge && python scripts/hardware_smoke.py   # 真实 ADALM2000 → docs/10
+```
+
+前两条已经接进 CI（CI 上没有 KiCad 所以跳过；MinIO 有单独一个 job 真跑）。
+真实硬件那条只能人工跑，checklist 在 docs/10。
 
 ## 本地 Bridge
 
@@ -184,6 +198,9 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | `docs/05-agent-design.md` | 智能体设计（packages/ai 实施规格） |
 | `docs/06-railway-setup.md` | Railway 服务与变量 |
 | `docs/07-operations.md` | **运维手册：mock/real 边界、队列、存储、Bridge 配对** |
+| `docs/08-real-kicad-validation.md` | 真实 KiCad 工程验证：fixture、`pnpm test:kicad-real`、已验证版本 |
+| `docs/09-storage-validation.md` | 对象存储验证：MinIO / R2 / S3，以及生产为什么不能用 mock |
+| `docs/10-adalm2000-hardware-validation.md` | ADALM2000 实机验证 checklist 与记录表 |
 | `prompts/P0..P8` | 分阶段执行 Prompt |
 
 ## 关键开关
@@ -193,6 +210,9 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | `MOCK_MODE=true` | 全链路无外部依赖演示（默认） |
 | `LLM_PROVIDER=gemini\|claude\|deepseek\|mock` | 模型切换，不改代码；缺 key 自动降级为 mock |
 | `BRIDGE_MOCK=true` | 无 ADALM2000 硬件时合成波形；`false` 为**实验性、未实机验证**的真实硬件路径 |
+| `STORAGE_ADAPTER=mock\|s3` | mock 落本地盘，s3 走对象存储。**生产必须 s3**，否则拒绝启动 |
+| `ALLOW_MOCK_STORAGE_IN_PRODUCTION` | 生产用 mock 的显式豁免，只给内置 Demo（见 docs/09） |
+| `KICAD_CLI` | kicad-cli 路径，留空从 PATH 找（macOS 上必须显式设） |
 | `BRIDGE_REQUIRE_PAIRING=true` | 硬件控制端点要求配对 token |
 | `BRIDGE_ALLOW_UNPAIRED_DEBUG` | 仅 CI/内置 Demo：放行 `/debug/scenario`，不放行 `/awg` |
 | `BRIDGE_SCENARIO` | 五个故障场景，数值见 `docs/05` §11.1 |

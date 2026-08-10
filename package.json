@@ -23,9 +23,13 @@
     "check:tracked": "bash scripts/check-tracked.sh",
     "job": "tsx --env-file-if-exists=.env scripts/enqueue-job.ts",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "test:kicad-real": "tsx scripts/test-kicad-real.ts",
+    "test:storage-real": "tsx --env-file-if-exists=.env scripts/test-storage-real.ts"
   },
   "devDependencies": {
+    "@app/kicad": "workspace:*",
+    "@app/storage": "workspace:*",
     "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.2",
     "eslint": "^10.8.1",

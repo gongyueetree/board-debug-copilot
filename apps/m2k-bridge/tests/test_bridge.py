@@ -155,8 +155,19 @@ def test_unpaired_debug_escape_hatch(monkeypatch):
     monkeypatch.setattr(m, "ALLOW_UNPAIRED_DEBUG", True)
     assert client.post("/debug/scenario", json={"scenario": "noisy"}).status_code == 200
 
-    # 豁免只对 debug 端点生效，不该顺带打开硬件控制
-    assert client.post("/awg", json={"amplitudeVpp": 0.4}).status_code == 401
+    # 豁免只对 debug 端点生效，不该顺带打开任何硬件控制面
+    for method, path, body in [
+        ("post", "/awg", {"amplitudeVpp": 0.4}),
+        ("post", "/scope", {}),
+        ("get", "/devices", None),
+    ]:
+        res = getattr(client, method)(path, **({"json": body} if body is not None else {}))
+        assert res.status_code == 401, f"豁免不该打开 {path}，实得 {res.status_code}"
+
+    # WebSocket 也一样：它推的是真实采集数据
+    with pytest.raises(Exception):
+        with client.websocket_connect("/ws") as ws:
+            ws.receive_text()
 
 
 def test_status_reports_escape_hatch():

@@ -42,6 +42,14 @@ jobs:
       - run: pnpm build
       - run: pnpm test
 
+      # 这两条在 CI 上都会 SKIPPED（没有 KiCad、没有 S3 配置）。
+      # 留着是为了让脚本本身的语法/导入错误在这里就暴露，而不是等到
+      # 有人真的装了 KiCad 才发现跑不起来。
+      - name: 真实 KiCad 验证（无 CLI 时跳过）
+        run: pnpm test:kicad-real
+      - name: 真实存储验证（无 S3 配置时跳过）
+        run: pnpm test:storage-real
+
   bridge:
     name: Bridge (pytest)
     runs-on: ubuntu-latest
@@ -66,6 +74,54 @@ jobs:
           BRIDGE_MOCK: 'true'
           BRIDGE_REQUIRE_PAIRING: 'true'
         run: python -m pytest -q
+
+  # MinIO 是本地容器，不消耗任何外部资源 —— 但它是真的 S3 兼容实现，
+  # 能覆盖进程内假服务覆盖不到的东西（真实错误码、真实签名校验）。
+  storage:
+    name: 存储（MinIO 端到端）
+    runs-on: ubuntu-latest
+    needs: unit
+
+    env:
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_REGION: auto
+      S3_BUCKET: bdc-test
+      S3_ACCESS_KEY_ID: bdc-test-key
+      S3_SECRET_ACCESS_KEY: bdc-test-secret
+      S3_FORCE_PATH_STYLE: 'true'
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build --filter @app/storage
+
+      # 用 docker run 而不是 services：service 容器不能覆盖 command，
+      # 而 minio 镜像必须显式传 `server /data`
+      - name: 启动 MinIO 并建桶
+        run: |
+          docker run -d --name minio --network host \
+            -e MINIO_ROOT_USER=$S3_ACCESS_KEY_ID \
+            -e MINIO_ROOT_PASSWORD=$S3_SECRET_ACCESS_KEY \
+            minio/minio:latest server /data
+          for i in $(seq 1 40); do
+            curl -sf http://127.0.0.1:9000/minio/health/live && break
+            sleep 1
+          done
+          docker run --rm --network host minio/mc:latest sh -c "
+            mc alias set local http://127.0.0.1:9000 $S3_ACCESS_KEY_ID $S3_SECRET_ACCESS_KEY &&
+            mc mb --ignore-existing local/$S3_BUCKET"
+
+      - run: pnpm test:storage-real
+
+      - name: 失败时导出 MinIO 日志
+        if: failure()
+        run: docker logs minio | tail -50
 
   integration:
     name: 集成（冒烟 + 智能体评测）

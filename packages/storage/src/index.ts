@@ -37,7 +37,7 @@ export const LIMITS: Record<FileKindKey, { maxBytes: number; mimes: readonly str
 export class StorageError extends Error {
   constructor(
     message: string,
-    readonly code: 'TOO_LARGE' | 'BAD_MIME' | 'NOT_FOUND' | 'BACKEND',
+    readonly code: 'TOO_LARGE' | 'BAD_MIME' | 'NOT_FOUND' | 'BACKEND' | 'BAD_KEY',
   ) {
     super(message)
     this.name = 'StorageError'
@@ -69,6 +69,40 @@ export function buildKey(parts: {
   filename: string
 }): string {
   return `projects/${parts.projectId}/${parts.scope}/${randomUUID()}-${sanitizeFilename(parts.filename)}`
+}
+
+/** key 形如 projects/<projectId>/<scope>/<name>；projectId 段就是归属依据 */
+export const OBJECT_KEY_SHAPE = /^projects\/([^/]+)\//
+
+/**
+ * 用户提供的 objectKey 校验。
+ *
+ * 只有 projects/ 前缀下的对象归本应用管。放开这条限制，mock 存储下就是
+ * 「读写服务器上任意路径」，S3 下就是「读写整个桶」。`..` 与 NUL 单独挡：
+ * 前者能穿越出前缀，后者在部分文件 API 里会截断路径。
+ *
+ * 与 buildKey 配对使用 —— buildKey 负责生成合规的 key，这里负责在
+ * key 来自请求体时把关。
+ */
+export function assertSafeObjectKey(key: string): void {
+  if (!key.startsWith('projects/')) {
+    throw new StorageError('objectKey 必须位于 projects/ 前缀下', 'BAD_KEY')
+  }
+  if (key.includes('..')) {
+    throw new StorageError('objectKey 含非法路径片段', 'BAD_KEY')
+  }
+  // eslint-disable-next-line no-control-regex
+  if (/[\x00-\x1f\x7f]/.test(key)) {
+    throw new StorageError('objectKey 含控制字符', 'BAD_KEY')
+  }
+  if (!OBJECT_KEY_SHAPE.test(key)) {
+    throw new StorageError('objectKey 缺少项目段', 'BAD_KEY')
+  }
+}
+
+/** 从合规 key 里取项目 id；不合规返回 null */
+export function projectIdFromKey(key: string): string | null {
+  return OBJECT_KEY_SHAPE.exec(key)?.[1] ?? null
 }
 
 export interface PutResult {
@@ -366,13 +400,71 @@ export function createStorage(env: NodeJS.ProcessEnv = process.env): StorageAdap
   return new S3Storage(parsed.data)
 }
 
-export function describeStorage(env: NodeJS.ProcessEnv = process.env) {
+export interface StorageStatus {
+  adapter: 'mock' | 's3'
+  /** STORAGE_ADAPTER 的原始值，可能与实际生效的 adapter 不同 */
+  requested: string
+  bucket: string | null
+  /** adapter 不是它该是的样子：请求了 s3 却退回 mock，或生产环境在用 mock */
+  degraded: boolean
+  /** 生产环境在用 mock 存储 —— 这不是可接受的配置，见 docs/09 */
+  productionUnsafe: boolean
+  allowMockInProduction: boolean
+  reason: string | null
+}
+
+/**
+ * mock 存储为什么不能上生产：
+ *
+ * 落的是容器本地盘，Railway/Vercel 的容器随时重建，重启即丢；无盘时更是直接
+ * 退回进程内存。它也没有对象级权限：读取要靠 api 自己开的 /files 路由代劳，
+ * 而那条路由是给本地开发用的。用它跑生产不是「性能差一点」，是数据会消失。
+ */
+export function describeStorage(env: NodeJS.ProcessEnv = process.env): StorageStatus {
   const adapter = createStorage(env)
   const requested = env.STORAGE_ADAPTER ?? 'mock'
+  const isProduction = env.NODE_ENV === 'production'
+  const allowMockInProduction = env.ALLOW_MOCK_STORAGE_IN_PRODUCTION === 'true'
+  const fellBack = adapter.name === 'mock' && requested === 's3'
+  const mockInProduction = adapter.name === 'mock' && isProduction
+
   return {
     adapter: adapter.name,
     requested,
     bucket: env.S3_BUCKET ?? null,
-    degraded: adapter.name === 'mock' && requested === 's3',
+    degraded: fellBack || mockInProduction,
+    productionUnsafe: mockInProduction && !allowMockInProduction,
+    allowMockInProduction,
+    reason: fellBack
+      ? 'STORAGE_ADAPTER=s3 但配置不全，已降级为 mock'
+      : mockInProduction
+        ? 'NODE_ENV=production 但存储是 mock：对象只在容器本地盘/内存，重启即丢'
+        : null,
   }
+}
+
+/**
+ * 启动前的硬校验。
+ *
+ * 选的是「启动失败」而不是「health 报 unhealthy」：生产上跑着 mock 存储，
+ * 每一次上传都在制造将来会凭空消失的数据。让它起不来，运维一眼就知道该配什么；
+ * 让它带病运行，问题要等到用户发现文件没了才暴露。
+ *
+ * 内置 Demo 这类明知故犯的场景用 ALLOW_MOCK_STORAGE_IN_PRODUCTION=true 显式豁免。
+ */
+export function assertStorageUsable(env: NodeJS.ProcessEnv = process.env): void {
+  const s = describeStorage(env)
+  if (!s.productionUnsafe) return
+  throw new StorageError(
+    [
+      'NODE_ENV=production 时不允许使用 mock 对象存储。',
+      '对象会落在容器本地盘（无盘时退内存），容器重建即丢失，且没有对象级权限。',
+      '',
+      '二选一：',
+      '  1) 配置真实对象存储：STORAGE_ADAPTER=s3 + S3_ENDPOINT / S3_BUCKET /',
+      '     S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY（R2、S3、MinIO 均可，见 docs/09）',
+      '  2) 明知故犯（仅内置 Demo）：ALLOW_MOCK_STORAGE_IN_PRODUCTION=true',
+    ].join('\n'),
+    'BACKEND',
+  )
 }

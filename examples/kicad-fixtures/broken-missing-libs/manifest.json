@@ -1,0 +1,10 @@
+{
+  "status": "placeholder",
+  "kicadVersion": "9.0",
+  "description": "缺符号/封装库：必须降级并写清 parseLog，不能崩",
+  "expect": {
+    "hasSch": true,
+    "mustNotCrash": true,
+    "parseLogMentions": ["erc"]
+  }
+}

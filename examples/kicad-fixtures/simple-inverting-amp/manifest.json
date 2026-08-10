@@ -1,0 +1,18 @@
+{
+  "status": "placeholder",
+  "kicadVersion": "9.0",
+  "description": "单页反相放大器：解析链路的基线用例",
+  "expect": {
+    "hasPro": true,
+    "hasSch": true,
+    "hasPcb": true,
+    "netlist": true,
+    "erc": true,
+    "drc": true,
+    "minComponents": 5,
+    "minNets": 4,
+    "minSchematicSvgs": 1,
+    "minPcbSvgs": 1,
+    "mustNotCrash": true
+  }
+}

@@ -13,14 +13,18 @@
 | 能力 | mock（默认） | real | 切换 | 真实路径验证状态 |
 | --- | --- | --- | --- | --- |
 | LLM | 预置结果，确定性 | Gemini / Claude / DeepSeek | `LLM_PROVIDER` + 对应 key | ✅ Gemini 已跑通评测 11/11 |
-| 对象存储 | 本地盘，无盘退内存 | S3 / R2 / MinIO | `STORAGE_ADAPTER=s3` | ⚠️ 接口完整，未接真实 bucket 验证 |
-| KiCad 解析 | 只解析包内 netlist | kicad-cli 全流程 | 装 KiCad 9 并让 `kicad-cli` 在 PATH | ⚠️ CLI 分支未在装有 KiCad 的机器上验证 |
+| 对象存储 | 本地盘，无盘退内存 | S3 / R2 / MinIO | `STORAGE_ADAPTER=s3` | ⚠️ adapter 对 S3 协议端点已验证；MinIO/R2/AWS 见 §7 与 docs/09 |
+| KiCad 解析 | 只解析包内 netlist | kicad-cli 全流程 | 装 KiCad 9 并让 `kicad-cli` 在 PATH | ⚠️ CLI 分支用假 CLI 覆盖；真实 KiCad 见 docs/08 |
 | ADALM2000 | numpy 合成波形 | libm2k | `BRIDGE_MOCK=false` | ❌ **实验性，未接真实硬件验证**（见 §5） |
 | 元器件库 | 内置常识参数 | 真实器件库 | 换 `PartsDatabaseAdapter` | ❌ 未接入 |
 | 队列 | 无 Redis 时同步兜底 | BullMQ | 配 `REDIS_URL` | ✅ 两条路径都验证过 |
 
 降级从不静默：`GET /health` 会报出 `llm.degraded` 与 `storage.degraded`，
-Bridge 的 `/status` 会报 `adapter` 与 `detail`。
+Bridge 的 `/status` 会报 `adapter`、`detail`、`hardwareVerified` 与 `allowUnpairedDebug`。
+
+**一个例外不是降级而是硬拒绝**：`NODE_ENV=production` + mock 存储 +
+没有 `ALLOW_MOCK_STORAGE_IN_PRODUCTION=true` → api 与 worker 直接拒绝启动。
+理由与配法见 `docs/09-storage-validation.md` §5。
 
 ---
 

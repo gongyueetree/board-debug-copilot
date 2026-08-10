@@ -1,0 +1,12 @@
+{
+  "status": "placeholder",
+  "kicadVersion": "9.0",
+  "description": "多页原理图：验证多个 SVG 都被保存",
+  "expect": {
+    "hasPro": true,
+    "hasSch": true,
+    "netlist": true,
+    "minSchematicSvgs": 2,
+    "mustNotCrash": true
+  }
+}

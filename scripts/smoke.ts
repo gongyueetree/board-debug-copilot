@@ -32,6 +32,27 @@ const expect = (cond: boolean, msg: string) => {
   if (!cond) throw new Error(msg)
 }
 
+const postJson = async (url: string, body: unknown, token?: string): Promise<any> => {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`HTTP ${res.status} ${(await res.text()).slice(0, 160)}`)
+  return res.json()
+}
+
+/**
+ * 鉴权检查之间要传递克隆出来的项目 id 与 token。
+ *
+ * 两个测试账号用固定邮箱，重复跑不会不断新建用户；但每跑一次会多一个克隆项目
+ * （目前没有删除项目的接口）。CI 每次都是干净库，本地跑多了自己清一下。
+ */
+const smokeState: { mine?: string; tokenA?: string } = {}
+
 const checks: Check[] = [
   {
     name: 'api /health',
@@ -145,6 +166,137 @@ const checks: Check[] = [
     },
   },
 ]
+
+/**
+ * 写操作鉴权的运行时检查。
+ *
+ * apps/api/test/authorization.test.ts 挡的是「源码里漏了 guard」，跑得快但看不到
+ * 真实 HTTP 行为。这里补上另一半：真登录、真克隆、真拿别人的项目去写。
+ * 需要数据库，所以放在冒烟里而不是 vitest。
+ */
+const authChecks: Check[] = [
+  {
+    name: 'auth 未登录不能写公共 Demo',
+    run: async () => {
+      const res = await fetch(`${API}/api/v1/projects/${PROJECT}/debug-steps`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'smoke 不该写进去', groupTitle: 'smoke' }),
+      })
+      expect(res.status === 403, `期望 403，实得 ${res.status}`)
+      return '403，公共 Demo 只读'
+    },
+  },
+  {
+    name: 'auth 未登录不能改公共 Demo 的步骤',
+    run: async () => {
+      // step id 不含项目信息，controller 必须先反查归属 —— 这里正是它漏过的地方
+      const steps = await json(`${API}/api/v1/projects/${PROJECT}/debug-steps`)
+      const id = steps.groups[0]?.steps[0]?.id
+      expect(!!id, '拿不到任何 debug step')
+      const res = await fetch(`${API}/api/v1/debug-steps/${id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'DONE' }),
+      })
+      expect(res.status === 403, `期望 403，实得 ${res.status}`)
+      return '403，反查归属后被拒'
+    },
+  },
+  {
+    name: 'auth 登录 → 克隆 → 能写自己的项目',
+    run: async () => {
+      const { token } = await postJson(`${API}/api/v1/auth/login`, {
+        email: 'smoke-owner@bdc.test',
+      })
+      const mine = await postJson(`${API}/api/v1/projects/${PROJECT}/clone`, {}, token)
+      expect(!!mine.id, '克隆没有返回项目 id')
+
+      const res = await fetch(`${API}/api/v1/projects/${mine.id}/debug-steps`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({ title: 'smoke 自己的步骤', groupTitle: 'smoke' }),
+      })
+      expect(res.ok, `写自己的项目应成功，实得 ${res.status}`)
+      smokeState.mine = mine.id
+      smokeState.tokenA = token
+      return `克隆为 ${mine.id.slice(0, 8)}…，写入成功`
+    },
+  },
+  {
+    name: 'auth 不能写别人的项目',
+    run: async () => {
+      expect(!!smokeState.mine, '上一步没有克隆出项目')
+      const { token } = await postJson(`${API}/api/v1/auth/login`, {
+        email: 'smoke-stranger@bdc.test',
+      })
+      const res = await fetch(`${API}/api/v1/projects/${smokeState.mine}/debug-steps`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({ title: '别人的项目', groupTitle: 'smoke' }),
+      })
+      expect(res.status === 403, `期望 403，实得 ${res.status}`)
+      return '403，他人项目不可写'
+    },
+  },
+  {
+    name: 'auth 捕获保存与报告生成都要鉴权',
+    run: async () => {
+      const results: string[] = []
+      for (const [path, body] of [
+        [`projects/${PROJECT}/captures`, { kind: 'SCOPE', label: 'smoke' }],
+        [`projects/${PROJECT}/reports`, {}],
+      ] as const) {
+        const res = await fetch(`${API}/api/v1/${path}`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        })
+        expect(res.status === 403, `${path} 期望 403，实得 ${res.status}`)
+        results.push(String(res.status))
+      }
+      return `captures/reports 均 ${results[0]}`
+    },
+  },
+  {
+    name: 'files objectKey 越界被拒',
+    run: async () => {
+      const bad = ['../../etc/passwd', 'etc/passwd', 'projects/../secret']
+      for (const key of bad) {
+        const res = await fetch(`${API}/api/v1/files/${encodeURIComponent(key)}`)
+        expect(res.status === 403, `${key} 期望 403，实得 ${res.status}`)
+      }
+      return `${bad.length} 种越界 key 全部 403`
+    },
+  },
+  {
+    name: 'files 私有项目的对象需要 token',
+    run: async () => {
+      expect(!!smokeState.mine, '没有可用的私有项目')
+      const key = `projects/${smokeState.mine}/kicad/whatever.zip`
+      const anon = await fetch(`${API}/api/v1/files/${encodeURIComponent(key)}`)
+      expect(anon.status === 403, `匿名读私有项目应 403，实得 ${anon.status}`)
+
+      // 带上 token 后不再是权限问题，而是对象本身不存在
+      const authed = await fetch(
+        `${API}/api/v1/files/${encodeURIComponent(key)}?token=${smokeState.tokenA}`,
+      )
+      expect(authed.status === 404, `带 token 应因对象不存在而 404，实得 ${authed.status}`)
+      return '匿名 403 / 有 token 404'
+    },
+  },
+  {
+    name: 'health 报告存储状态',
+    run: async () => {
+      const d = await json(`${API}/health`)
+      expect(!!d.storage, '/health 没有 storage 字段')
+      expect(d.storage.productionUnsafe === false, '存储处于不可用于生产的状态')
+      return `adapter=${d.storage.adapter} degraded=${d.storage.degraded}`
+    },
+  },
+]
+
+checks.push(...authChecks)
 
 const PAGES: [string, string, string[]][] = [
   ['总览', '', ['工程解析完成', 'AI 调试参谋', '高风险问题', '最近调试记录']],

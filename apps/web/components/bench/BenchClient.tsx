@@ -13,6 +13,7 @@ import { useMemo, useState } from 'react'
 import type { Measurements, Scenario } from '@app/contracts'
 import {
   isExperimentalHardware,
+  isUnpairedDebugOpen,
   needsConfirm,
   useBridge,
   type AwgRequest,
@@ -114,10 +115,21 @@ BRIDGE_MOCK=true uvicorn src.main:app --host 127.0.0.1 --port 3777`}
     <div className="flex h-[calc(100vh-9rem)] flex-col gap-3">
       {isExperimentalHardware(bridge.status) && (
         <div className="shrink-0 rounded-card border border-orange-300 bg-orange-50 px-4 py-2.5 text-xs text-orange-900">
-          <strong className="font-semibold">实验性硬件模式</strong>
-          ：当前 Bridge 使用真实 ADALM2000 适配器（adapter={bridge.status?.adapter}
-          ），但该路径尚未经过实机验证。AWG 实际输出频率、方波/三角波等波形类型、
-          采集校准链路都可能与界面显示不符。请先用示波器独立核对输出，再接到被测板卡上。
+          <strong className="font-semibold">
+            当前为实验性真实硬件模式，ADALM2000 尚未完成实机验证。请谨慎启用输出。
+          </strong>
+          <span className="mt-1 block text-orange-800">
+            adapter={bridge.status?.adapter}，hardwareVerified=false。AWG 实际输出频率、
+            方波/三角波等波形类型、采集校准链路都可能与界面显示不符 ——
+            请先用独立示波器核对输出，再接到被测板卡上。验证清单见
+            docs/10-adalm2000-hardware-validation.md。
+          </span>
+        </div>
+      )}
+      {isUnpairedDebugOpen(bridge.status) && (
+        <div className="shrink-0 rounded-card border border-amber-300 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+          当前开启未配对 mock 场景切换（BRIDGE_ALLOW_UNPAIRED_DEBUG=true），
+          仅用于 CI/demo，不建议生产使用。它只放行场景切换，不放行信号源输出。
         </div>
       )}
       <div className="flex min-h-0 flex-1 gap-3">

@@ -16,6 +16,15 @@ export default tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
+    // 纯 JS 的 Node 脚本。TS 文件不需要这段（typescript-eslint 关掉了 no-undef，
+    // 全局符号交给 @types/node 判定），只有 .mjs/.js 会撞上。
+    // 不引 globals 包：这里只用到这几个，列出来比多一个依赖清楚。
+    files: ['**/*.mjs', '**/*.js'],
+    languageOptions: {
+      globals: { process: 'readonly', console: 'readonly', Buffer: 'readonly', URL: 'readonly' },
+    },
+  },
+  {
     rules: {
       // 项目里大量用 `as never` 绕开 Prisma 的 Json 类型，这是有意为之
       '@typescript-eslint/no-explicit-any': 'warn',

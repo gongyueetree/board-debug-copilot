@@ -1,0 +1,16 @@
+{
+  "status": "placeholder",
+  "kicadVersion": "9.0",
+  "description": "只有 PCB 没有原理图：缺 netlist 不算失败",
+  "expect": {
+    "hasPro": true,
+    "hasSch": false,
+    "hasPcb": true,
+    "netlist": false,
+    "erc": false,
+    "drc": true,
+    "minPcbSvgs": 1,
+    "minComponents": 0,
+    "mustNotCrash": true
+  }
+}

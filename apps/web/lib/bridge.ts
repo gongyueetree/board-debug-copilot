@@ -20,6 +20,8 @@ export interface BridgeStatus {
   hardwareVerified: boolean
   experimental: boolean
   pairingRequired: boolean
+  /** 未配对也能切 mock 场景。仅 CI 与内置 Demo 该开 */
+  allowUnpairedDebug: boolean
   paired: boolean
   pairingPending: boolean
   codeExpiresInSeconds: number
@@ -34,6 +36,16 @@ export interface BridgeStatus {
 export function isExperimentalHardware(s: BridgeStatus | null): boolean {
   if (!s || s.mock) return false
   return s.experimental === true || s.hardwareVerified !== true
+}
+
+/**
+ * 配对被显式放宽了。
+ *
+ * 只放行 mock 场景切换，不放行 /awg —— 但换场景会改变波形、测量值和 AI 诊断
+ * 结论，属于「能改变操作者所见」的接口。生产环境不该常开着，所以要显形。
+ */
+export function isUnpairedDebugOpen(s: BridgeStatus | null): boolean {
+  return s?.allowUnpairedDebug === true
 }
 
 const TOKEN_KEY = 'bdc.bridge.token'

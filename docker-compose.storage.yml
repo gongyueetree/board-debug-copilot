@@ -1,0 +1,48 @@
+# S3 兼容对象存储（MinIO），只为本地验证 STORAGE_ADAPTER=s3 这条路径。
+#
+#   docker compose -f docker-compose.storage.yml up -d
+#   pnpm test:storage-real
+#
+# 和 docker-compose.dev.yml 分开：不是每次本地开发都需要对象存储，
+# mock adapter 已经够跑完整个 Demo。这个文件是「要验真实存储时才起」。
+#
+# 凭据是固定的测试值，只监听本机。不要拿这套配置上任何公网环境。
+services:
+  minio:
+    # 用 latest 而不是钉版本：钉一个没验证过的 RELEASE tag，拉不下来才发现更糟。
+    # 第一次跑通后建议把 `docker image inspect` 出来的 digest 钉进去。
+    image: minio/minio:latest
+    container_name: bdc-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: bdc-test-key
+      MINIO_ROOT_PASSWORD: bdc-test-secret
+    ports:
+      - "127.0.0.1:9000:9000"
+      - "127.0.0.1:9001:9001"
+    volumes:
+      - bdc-minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  # 一次性任务：建桶后退出。分开跑而不是塞进 minio 的 entrypoint，
+  # 免得桶初始化失败被 server 的日志淹掉。
+  minio-init:
+    image: minio/mc:latest
+    container_name: bdc-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 bdc-test-key bdc-test-secret &&
+      mc mb --ignore-existing local/bdc-test &&
+      mc anonymous set none local/bdc-test &&
+      echo 'bucket bdc-test 就绪'
+      "
+
+volumes:
+  bdc-minio-data:

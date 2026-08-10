@@ -1,0 +1,2 @@
+真实 KiCad 工程文件放在这个目录里。放进来之后把上一级 manifest.json 的
+status 改成 ready，pnpm test:kicad-real 会自动开始断言。
