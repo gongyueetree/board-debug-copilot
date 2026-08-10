@@ -13,9 +13,12 @@
 | objectKey 安全校验（前缀、`..`、控制字符） | ✅ 单元测试覆盖 |
 | 生产禁用 mock 的启动校验 | ✅ 单元测试覆盖 |
 | S3 adapter 对真实 HTTP 端点（签名、head、直传 URL） | ✅ 进程内 S3 协议假服务，CI 每次跑 |
-| **MinIO** | ❌ 未跑过 |
+| **MinIO** | ✅ CI 每次推送都跑（`存储（MinIO 端到端）` job，7/7） |
 | **Cloudflare R2** | ❌ 未跑过 |
 | **AWS S3** | ❌ 未跑过 |
+
+MinIO 已验证不等于 R2/AWS 也没问题：region 语义、path-style、CORS、
+桶策略在三家上并不一样。换端点后请重跑一次 `pnpm test:storage-real`。
 
 `packages/storage/test/s3-adapter.test.ts` 起了一个进程内的 S3 协议 HTTP 服务，
 请求真的经过 AWS SDK 签名、真的走 HTTP、响应头真的被 SDK 解析。它能挡住

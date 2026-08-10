@@ -13,7 +13,7 @@
 | 能力 | mock（默认） | real | 切换 | 真实路径验证状态 |
 | --- | --- | --- | --- | --- |
 | LLM | 预置结果，确定性 | Gemini / Claude / DeepSeek | `LLM_PROVIDER` + 对应 key | ✅ Gemini 已跑通评测 11/11 |
-| 对象存储 | 本地盘，无盘退内存 | S3 / R2 / MinIO | `STORAGE_ADAPTER=s3` | ⚠️ adapter 对 S3 协议端点已验证；MinIO/R2/AWS 见 §7 与 docs/09 |
+| 对象存储 | 本地盘，无盘退内存 | S3 / R2 / MinIO | `STORAGE_ADAPTER=s3` | ✅ MinIO 在 CI 每次跑通；R2/AWS 未验证，见 docs/09 |
 | KiCad 解析 | 只解析包内 netlist | kicad-cli 全流程 | 装 KiCad 9 并让 `kicad-cli` 在 PATH | ⚠️ CLI 分支用假 CLI 覆盖；真实 KiCad 见 docs/08 |
 | ADALM2000 | numpy 合成波形 | libm2k | `BRIDGE_MOCK=false` | ❌ **实验性，未接真实硬件验证**（见 §5） |
 | 元器件库 | 内置常识参数 | 真实器件库 | 换 `PartsDatabaseAdapter` | ❌ 未接入 |
