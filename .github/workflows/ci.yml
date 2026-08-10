@@ -18,9 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 版本由 package.json 的 packageManager 决定；
+      # 这里再写 version 会和它冲突（ERR_PNPM_BAD_PM_VERSION）
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
@@ -93,9 +93,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 版本由 package.json 的 packageManager 决定；
+      # 这里再写 version 会和它冲突（ERR_PNPM_BAD_PM_VERSION）
       - uses: pnpm/action-setup@v4
-        with:
-          version: 10
 
       - uses: actions/setup-node@v4
         with:
