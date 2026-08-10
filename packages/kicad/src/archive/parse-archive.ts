@@ -108,13 +108,13 @@ export async function parseKicadArchive(deps: ArchiveDeps): Promise<ArchiveOutco
       log.push('[WARN] 未找到 kicad-cli，ERC/DRC 与 SVG 导出已跳过')
     }
 
-    // 新版本号：让旧捕获能被标记为来自旧设计
-    const prev = await prisma.projectFile.findFirst({
-      where: { projectId, kind: 'KICAD_ZIP' },
-      orderBy: { createdAt: 'desc' },
-      select: { parseLog: true },
+    // 新版本号取自 Project 自身。不能从「最近一个 ProjectFile 的 parseLog」推：
+    // 上传记录是在解析之前创建的，那条最近记录就是本次自己，永远读不到上一版。
+    const current = await prisma.project.findUnique({
+      where: { id: projectId },
+      select: { designVersion: true },
     })
-    const designVersion = (Number(/designVersion=(\d+)/.exec(prev?.parseLog ?? '')?.[1] ?? 0) || 0) + 1
+    const designVersion = (current?.designVersion ?? 0) + 1
 
     // 产物入对象存储
     let artifacts = 0

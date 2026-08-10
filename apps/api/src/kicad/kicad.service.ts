@@ -1,31 +1,28 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common'
-import { execFile } from 'node:child_process'
-import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, relative } from 'node:path'
-import { promisify } from 'node:util'
-import { parseNetlist, parseProject, type DesignGraph } from '@app/kicad'
+import { LIMITS } from '@app/storage'
+import { parseKicadArchive } from '@app/kicad'
 import { PrismaService } from '../prisma/prisma.service'
+import { QueueService } from '../queue/queue.service'
 import { StorageService } from '../storage/storage.service'
 
-const run = promisify(execFile)
-
-export interface ParseResult {
-  projectId: string
-  mode: 'cli' | 'mock'
-  status: 'READY' | 'ERROR'
-  components: number
-  nets: number
-  files: string[]
-  log: string
+export interface UploadHandoff {
+  fileId: string
+  objectKey: string
+  status: 'QUEUED' | 'PARSING' | 'READY' | 'ERROR'
+  /** 队列不可用时为 true，解析已同步执行 */
+  degraded: boolean
+  jobId: string | null
+  message: string
 }
 
 /**
- * KiCad zip 解析。
+ * KiCad 上传入口。
  *
- * CLAUDE.md 硬性原则 #8：CLI 失败写 parseLog，不能让整个项目崩溃。
- * 因此这里没有任何一处会把异常抛到调用方 —— 最坏情况是 status=ERROR + 完整 parseLog，
- * 项目本身仍然可用（原有数据不动）。
+ * 这里只做三件事：校验、登记 ProjectFile、入队。真正的解压与 kicad-cli
+ * 在 worker 里跑 —— 大工程 ERC+DRC+两次 SVG 导出要几十秒，
+ * 放在请求生命周期里会被网关先超时掐掉。
+ *
+ * 没有 Redis 时同步兜底执行，保证本地开发与演示不受影响。
  */
 @Injectable()
 export class KicadService {
@@ -34,19 +31,77 @@ export class KicadService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
+    private readonly queue: QueueService,
   ) {}
 
+  /** 直传签名 */
+  async presignUpload(
+    projectId: string,
+    input: { filename: string; mimeType: string; sizeBytes: number },
+  ) {
+    await this.assertProject(projectId)
+    this.storage.validate('zip', input.mimeType, input.sizeBytes)
+
+    const key = this.storage.key(projectId, 'kicad', input.filename)
+    const presigned = await this.storage.presignUpload({
+      key,
+      mimeType: input.mimeType,
+      maxBytes: LIMITS.zip.maxBytes,
+    })
+
+    return {
+      ...presigned,
+      // mock 模式没有真正的直传，前端据此回落到 base64
+      hint: presigned.isFallback
+        ? 'mock 存储无直传能力，请改用 POST /kicad/upload 的 base64 回落'
+        : '用 PUT 把文件发到该 URL，完成后调用 /kicad/complete',
+    }
+  }
+
+  /** 直传完成回调 */
+  async completeUpload(
+    projectId: string,
+    input: { objectKey: string; filename: string; sizeBytes: number },
+  ): Promise<UploadHandoff> {
+    await this.assertProject(projectId)
+
+    // 不信任前端报的大小，回读确认对象确实存在
+    const buf = await this.storage.get(input.objectKey)
+    if (!buf) {
+      throw new NotFoundException(`对象不存在: ${input.objectKey}，直传可能未成功`)
+    }
+    this.storage.validate('zip', 'application/zip', buf.byteLength)
+
+    const file = await this.prisma.projectFile.create({
+      data: {
+        projectId,
+        kind: 'KICAD_ZIP',
+        filename: input.filename,
+        objectKey: input.objectKey,
+        mimeType: 'application/zip',
+        sizeBytes: buf.byteLength,
+        parseStatus: 'PENDING',
+      },
+    })
+    return this.handoff(projectId, file.id, input.objectKey)
+  }
+
+  /**
+   * base64 直接上传。
+   *
+   * @deprecated 大文件请用 presign + complete。整个文件会在内存里过一遍，
+   * 100MB 的 zip 会让 Node 峰值内存翻倍。保留是为了 mock 存储与本地开发。
+   */
   async uploadAndParse(
     projectId: string,
     input: { filename: string; base64: string; mimeType?: string },
-  ): Promise<ParseResult> {
-    const project = await this.prisma.project.findUnique({ where: { id: projectId } })
-    if (!project) throw new NotFoundException(`项目不存在: ${projectId}`)
+  ): Promise<UploadHandoff> {
+    await this.assertProject(projectId)
 
     const data = Buffer.from(input.base64, 'base64')
     this.storage.validate('zip', input.mimeType ?? 'application/zip', data.byteLength)
 
-    const key = `projects/${projectId}/kicad/${Date.now()}-${input.filename}`
+    const key = this.storage.key(projectId, 'kicad', input.filename)
     const { objectKey, checksum } = await this.storage.put(key, data, 'application/zip')
 
     const file = await this.prisma.projectFile.create({
@@ -61,190 +116,122 @@ export class KicadService {
         parseStatus: 'PENDING',
       },
     })
+    return this.handoff(projectId, file.id, objectKey)
+  }
 
+  /** 重新解析已上传的工程 */
+  async reparse(projectId: string, fileId: string): Promise<UploadHandoff> {
+    const file = await this.prisma.projectFile.findUnique({ where: { id: fileId } })
+    if (!file || file.projectId !== projectId) {
+      throw new NotFoundException(`上传记录不存在: ${fileId}`)
+    }
+    await this.prisma.projectFile.update({
+      where: { id: fileId },
+      data: { parseStatus: 'PENDING', parseLog: null },
+    })
+    return this.handoff(projectId, fileId, file.objectKey)
+  }
+
+  private async handoff(
+    projectId: string,
+    fileId: string,
+    objectKey: string,
+  ): Promise<UploadHandoff> {
     await this.prisma.project.update({ where: { id: projectId }, data: { status: 'PARSING' } })
 
-    const result = await this.parse(projectId, data)
+    const enq = await this.queue.enqueue('kicad.parse', { projectId, objectKey, fileId })
+    if (enq.enqueued) {
+      return {
+        fileId,
+        objectKey,
+        status: 'QUEUED',
+        degraded: false,
+        jobId: enq.jobId,
+        message: '已入队，解析完成后项目状态会更新',
+      }
+    }
+
+    // 队列不可用：同步兜底。本地开发与无 Redis 的演示环境走这条路。
+    this.logger.warn(`队列不可用（${enq.reason}），改为同步解析`)
+    const outcome = await parseKicadArchive({
+      projectId,
+      objectKey,
+      prisma: this.prisma,
+      storage: this.storage.raw(),
+    })
 
     await this.prisma.projectFile.update({
-      where: { id: file.id },
-      data: { parseStatus: result.status, parseLog: result.log },
+      where: { id: fileId },
+      data: { parseStatus: outcome.status, parseLog: outcome.log },
     })
     await this.prisma.project.update({
       where: { id: projectId },
-      data: { status: result.status },
+      data: { status: outcome.status === 'READY' ? 'READY' : 'ERROR' },
     })
 
-    return result
-  }
-
-  /** 解压 → 找工程文件 → kicad-cli（缺失则降级）→ 解析 netlist → 入库 */
-  private async parse(projectId: string, zip: Buffer): Promise<ParseResult> {
-    const log: string[] = []
-    let dir: string | null = null
-
-    try {
-      dir = await mkdtemp(join(tmpdir(), 'bdc-kicad-'))
-      const zipPath = join(dir, 'project.zip')
-      await writeFile(zipPath, zip)
-
-      // 用系统 unzip 而不是引 JS 解压库：Nixpacks 镜像里就有，少一个依赖
-      try {
-        await run('unzip', ['-q', '-o', zipPath, '-d', dir], { timeout: 60_000 })
-        log.push('[OK ] unzip: 解压完成')
-      } catch (err) {
-        log.push(`[ERR] unzip: ${(err as Error).message.slice(0, 200)}`)
-        return this.fail(projectId, log, '解压失败，zip 可能损坏或不是有效压缩包')
-      }
-
-      const files = await this.walk(dir)
-      const rel = files.map((f) => relative(dir!, f))
-      log.push(`[OK ] discover: 共 ${rel.length} 个文件`)
-
-      const pick = (ext: string) => files.find((f) => f.endsWith(ext))
-      const sch = pick('.kicad_sch')
-      const pcb = pick('.kicad_pcb')
-      const pro = pick('.kicad_pro')
-      log.push(
-        `[${sch || pcb ? 'OK ' : 'ERR'}] locate: ` +
-          `pro=${pro ? '✓' : '✗'} sch=${sch ? '✓' : '✗'} pcb=${pcb ? '✓' : '✗'}`,
-      )
-
-      if (!sch && !pcb) {
-        return this.fail(projectId, log, '压缩包内未找到 .kicad_sch 或 .kicad_pcb')
-      }
-
-      const outcome = await parseProject(dir, {
-        pro: pro ? relative(dir, pro) : undefined,
-        sch: sch ? relative(dir, sch) : undefined,
-        pcb: pcb ? relative(dir, pcb) : undefined,
-      })
-      log.push(outcome.log)
-
-      // 优先用 CLI 导出的 netlist；没有就找包里自带的 .net
-      let graph: DesignGraph | null = null
-      const netPath = outcome.artifacts.netlistPath
-        ? join(dir, outcome.artifacts.netlistPath)
-        : files.find((f) => f.endsWith('.net'))
-
-      if (netPath) {
-        try {
-          graph = parseNetlist(await readFile(netPath, 'utf8'))
-          log.push(
-            `[OK ] netlist: 解析出 ${graph.components.length} 个组件 / ${graph.nets.length} 个网络`,
-          )
-        } catch (err) {
-          log.push(`[ERR] netlist: ${(err as Error).message.slice(0, 200)}`)
-        }
-      } else {
-        log.push('[ERR] netlist: 未找到 netlist，无法提取结构化数据')
-      }
-
-      if (!graph || graph.components.length === 0) {
-        // 解析不出结构化数据不算项目失败：保留原有 seed 数据，把原因写进 parseLog
-        log.push('[WARN] 降级：保留项目现有设计数据，仅记录本次上传')
-        return {
-          projectId,
-          mode: outcome.mode,
-          status: 'READY',
-          components: 0,
-          nets: 0,
-          files: rel,
-          log: log.join('\n'),
-        }
-      }
-
-      await this.replaceDesign(projectId, graph)
-      log.push('[OK ] persist: 设计数据已替换')
-
-      return {
-        projectId,
-        mode: outcome.mode,
-        status: 'READY',
-        components: graph.components.length,
-        nets: graph.nets.length,
-        files: rel,
-        log: log.join('\n'),
-      }
-    } catch (err) {
-      log.push(`[ERR] fatal: ${(err as Error).message.slice(0, 300)}`)
-      return this.fail(projectId, log, '解析过程异常')
-    } finally {
-      if (dir) await rm(dir, { recursive: true, force: true }).catch(() => {})
-    }
-  }
-
-  private fail(projectId: string, log: string[], reason: string): ParseResult {
-    this.logger.warn(`KiCad 解析失败 ${projectId}: ${reason}`)
     return {
-      projectId,
-      mode: 'mock',
-      status: 'ERROR',
-      components: 0,
-      nets: 0,
-      files: [],
-      log: [...log, `[ERR] ${reason}`].join('\n'),
+      fileId,
+      objectKey,
+      status: outcome.status,
+      degraded: true,
+      jobId: null,
+      message: `队列不可用，已同步解析：${outcome.components} 组件 / ${outcome.nets} 网络`,
     }
   }
 
-  /** 用解析结果整体替换设计数据。捕获、步骤、照片、报告都不动。 */
-  private async replaceDesign(projectId: string, graph: DesignGraph) {
-    await this.prisma.$transaction(async (tx) => {
-      // 设计被整体替换后，所有描述旧设计的违规都失效 —— 包括 ERC/DRC。
-      // 只删 RULE_ENGINE/AI 会留下引用已删除位号的僵尸记录，
-      // 那些位号在新工程里根本不存在。
-      await tx.ruleViolation.deleteMany({ where: { projectId } })
-      // Pin 由 Component 级联删除，Net 上的引用会随之清空
-      await tx.component.deleteMany({ where: { projectId } })
-      await tx.net.deleteMany({ where: { projectId } })
+  /** 解析状态与 parseLog，前端据此显示失败原因而不是空白页 */
+  async status(projectId: string) {
+    const [project, uploads, artifacts] = await Promise.all([
+      this.prisma.project.findUnique({
+        where: { id: projectId },
+        select: { status: true, designVersion: true },
+      }),
+      this.prisma.projectFile.findMany({
+        where: { projectId, kind: 'KICAD_ZIP' },
+        orderBy: { createdAt: 'desc' },
+        take: 5,
+      }),
+      this.prisma.projectFile.findMany({
+        where: {
+          projectId,
+          kind: { in: ['SCHEMATIC', 'PCB', 'NETLIST', 'ERC_REPORT', 'DRC_REPORT'] },
+        },
+        orderBy: { createdAt: 'desc' },
+      }),
+    ])
 
-      const netId = new Map<string, string>()
-      for (const n of graph.nets) {
-        const created = await tx.net.create({
-          data: {
-            projectId,
-            name: n.name,
-            inferredRole: n.inferredRole,
-            expectedVoltage: n.expectedVoltage,
-          },
-        })
-        netId.set(n.name, created.id)
-      }
-
-      for (const c of graph.components) {
-        const created = await tx.component.create({
-          data: {
-            projectId,
-            ref: c.ref,
-            value: c.value,
-            partNumber: c.partNumber,
-            footprint: (c.meta.footprint as string | undefined) ?? null,
-            rawJson: c.meta as never,
-          },
-        })
-        for (const p of c.pins) {
-          await tx.pin.create({
-            data: {
-              componentId: created.id,
-              number: p.number,
-              name: p.name,
-              type: p.type,
-              netId: p.netName ? (netId.get(p.netName) ?? null) : null,
-            },
-          })
-        }
-      }
-    })
+    return {
+      status: project?.status ?? 'CREATED',
+      designVersion: project?.designVersion ?? 1,
+      queueAvailable: this.queue.available,
+      uploads: uploads.map((f) => ({
+        id: f.id,
+        filename: f.filename,
+        sizeBytes: f.sizeBytes,
+        parseStatus: f.parseStatus,
+        parseLog: f.parseLog,
+        createdAt: f.createdAt.toISOString(),
+      })),
+      artifacts: artifacts.map((f) => ({
+        id: f.id,
+        kind: f.kind,
+        filename: f.filename,
+        objectKey: f.objectKey,
+        sizeBytes: f.sizeBytes,
+      })),
+    }
   }
 
-  private async walk(dir: string): Promise<string[]> {
-    const out: string[] = []
-    const entries = await readdir(dir, { withFileTypes: true })
-    for (const e of entries) {
-      const full = join(dir, e.name)
-      if (e.isDirectory()) out.push(...(await this.walk(full)))
-      else out.push(full)
-    }
-    return out
+  /** 产物下载：签名 URL 或直接回内容 */
+  async artifactUrl(fileId: string): Promise<{ url: string | null; filename: string }> {
+    const f = await this.prisma.projectFile.findUnique({ where: { id: fileId } })
+    if (!f) throw new NotFoundException(`产物不存在: ${fileId}`)
+    return { url: await this.storage.signedReadUrl(f.objectKey), filename: f.filename }
+  }
+
+  private async assertProject(id: string) {
+    const p = await this.prisma.project.findUnique({ where: { id } })
+    if (!p) throw new NotFoundException(`项目不存在: ${id}`)
+    return p
   }
 }

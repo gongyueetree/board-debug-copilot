@@ -6,6 +6,7 @@ import { HealthController } from './health/health.controller'
 import { KicadModule } from './kicad/kicad.module'
 import { PartsModule } from './parts/parts.module'
 import { PrismaModule } from './prisma/prisma.module'
+import { QueueModule } from './queue/queue.module'
 import { ProjectsModule } from './projects/projects.module'
 
 @Module({
@@ -13,6 +14,7 @@ import { ProjectsModule } from './projects/projects.module'
     ConfigModule.forRoot({ isGlobal: true }),
     PrismaModule,
     AuthModule,
+    QueueModule,
     ProjectsModule,
     AiModule,
     KicadModule,
