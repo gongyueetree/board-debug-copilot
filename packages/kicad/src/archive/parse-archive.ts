@@ -62,6 +62,32 @@ const MULTI_ARTIFACTS = {
   pcbSvgPaths: { kind: 'PCB', mime: 'image/svg+xml' },
 } as const
 
+/**
+ * 从压缩包里挑出**根**工程文件。
+ *
+ * 层次化原理图有多个 .kicad_sch，随手 find() 到的很可能是某个子图 ——
+ * 那样导出的 netlist 只有子图那几个器件，SVG 也只有一页，而且不会报错，
+ * 只是安静地少一半数据。根图的判据：文件名与 .kicad_pro 同名。
+ *
+ * 没有 .kicad_pro（只上传了原理图）时退回「层级最浅、名字最短」的那个 ——
+ * 根图通常在包的顶层，子图常放在子目录或带后缀。
+ */
+export function pickRoot(files: string[], ext: string, pro?: string): string | undefined {
+  const candidates = files.filter((f) => f.endsWith(ext))
+  if (candidates.length <= 1) return candidates[0]
+
+  if (pro) {
+    const stem = basename(pro).slice(0, -'.kicad_pro'.length)
+    const match = candidates.find((f) => basename(f) === `${stem}${ext}`)
+    if (match) return match
+  }
+
+  return [...candidates].sort((a, b) => {
+    const depth = (p: string) => p.split(/[/\\]/).length
+    return depth(a) - depth(b) || basename(a).length - basename(b).length || a.localeCompare(b)
+  })[0]
+}
+
 export async function parseKicadArchive(deps: ArchiveDeps): Promise<ArchiveOutcome> {
   const { projectId, objectKey, prisma, storage } = deps
   const log: string[] = []
@@ -98,10 +124,9 @@ export async function parseKicadArchive(deps: ArchiveDeps): Promise<ArchiveOutco
       return fail(`解压失败: ${(err as Error).message}`)
     }
 
-    const find = (ext: string) => unzipped.files.find((f) => f.endsWith(ext))
-    const sch = find('.kicad_sch')
-    const pcb = find('.kicad_pcb')
-    const pro = find('.kicad_pro')
+    const pro = unzipped.files.find((f) => f.endsWith('.kicad_pro'))
+    const sch = pickRoot(unzipped.files, '.kicad_sch', pro)
+    const pcb = pickRoot(unzipped.files, '.kicad_pcb', pro)
     log.push(
       `[${sch || pcb ? 'OK ' : 'ERR'}] locate: pro=${pro ? '✓' : '✗'} sch=${sch ? '✓' : '✗'} pcb=${pcb ? '✓' : '✗'}`,
     )

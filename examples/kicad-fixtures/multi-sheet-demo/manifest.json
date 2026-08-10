@@ -1,12 +1,17 @@
 {
-  "status": "placeholder",
-  "kicadVersion": "9.0",
-  "description": "多页原理图：验证多个 SVG 都被保存",
-  "expect": {
-    "hasPro": true,
-    "hasSch": true,
-    "netlist": true,
-    "minSchematicSvgs": 2,
-    "mustNotCrash": true
-  }
+  "name": "multi-sheet-demo",
+  "description": "层次化原理图：顶层 + Amplifier + Power 两个子图，验证多页 SVG 全部保存",
+  "status": "ready",
+  "kicadVersion": "10.0.1",
+  "expectedComponentsMin": 8,
+  "expectedNetsMin": 6,
+  "expectedSchematicSvgCount": 3,
+  "expectedPcbSvgCount": 1,
+  "expectedMode": "cli",
+  "allowWarnings": true,
+  "shouldNotCrash": true,
+  "expectNetlist": true,
+  "expectErc": true,
+  "expectDrc": false,
+  "notes": "3 个 SVG = 顶层 + 两个子图。早先把 --output 当文件路径读，遇到目录整条解析会挂"
 }

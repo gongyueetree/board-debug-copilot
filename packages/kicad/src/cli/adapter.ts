@@ -44,7 +44,19 @@ export interface KicadCliOptions {
   /** kicad-cli 可执行文件路径，默认从 PATH 找 */
   bin?: string
   timeoutMs?: number
+  /**
+   * DRC 单独的超时。
+   *
+   * KiCad 10.0.1 的 `pcb drc` 在 macOS 上会无限挂住（空板也挂，见 docs/08 §6），
+   * 用统一的 120s 会让每次带 PCB 的解析白等两分钟。DRC 失败不影响 netlist，
+   * 所以宁可早点放弃。真实大板的 DRC 可能确实要更久，用
+   * KICAD_DRC_TIMEOUT_MS 调。
+   */
+  drcTimeoutMs?: number
 }
+
+/** `pcb export svg` 必须指定层，否则直接报错退出（KiCad 9 起） */
+const DEFAULT_PCB_SVG_LAYERS = 'F.Cu,B.Cu,F.SilkS,F.Mask,Edge.Cuts'
 
 /**
  * 扫描 `--output` 指向的位置，收集实际产出的 SVG，返回相对 dir 的 posix 路径。
@@ -108,24 +120,33 @@ export async function parseProject(
     return { mode: 'mock', ok: true, steps, log: renderLog(steps), artifacts }
   }
 
+  const envDrcTimeout = Number(process.env.KICAD_DRC_TIMEOUT_MS)
+  const drcTimeout =
+    opts.drcTimeoutMs ?? (Number.isFinite(envDrcTimeout) && envDrcTimeout > 0 ? envDrcTimeout : 60_000)
+
   const attempt = async (
     name: string,
     args: string[],
     out?: 'netlistPath' | 'ercReportPath' | 'drcReportPath',
   ) => {
+    const budget = name === 'drc' ? drcTimeout : timeout
     try {
-      const { stdout, stderr } = await run(bin, args, { cwd: dir, timeout })
+      const { stdout, stderr } = await run(bin, args, { cwd: dir, timeout: budget })
       steps.push({ name, ok: true, detail: (stdout || stderr).slice(0, 400) || 'ok' })
       // 只有确定是单文件的产物才直接记路径；SVG 走 collectSvgs 扫描
       if (out) artifacts[out] = args.at(-2)
     } catch (err) {
       // ERC/DRC 产生告警会以非零退出，这不算解析失败（docs/00 §11.3）
       const soft = name === 'erc' || name === 'drc'
-      steps.push({
-        name,
-        ok: soft,
-        detail: `${soft ? '有告警但继续' : '失败'}：${(err as Error).message.slice(0, 400)}`,
-      })
+      const e = err as Error & { killed?: boolean; signal?: string }
+      // 超时和「有告警」长得完全不一样，日志里必须能区分，
+      // 否则 KiCad 那个挂死会被读成「板子有问题」
+      const timedOut = e.killed === true || e.signal === 'SIGTERM'
+      const detail = timedOut
+        ? `超时 ${budget}ms 被终止` +
+          (name === 'drc' ? '（KiCad 10 的 pcb drc 有挂死问题，见 docs/08 §6）' : '')
+        : `${soft ? '有告警但继续' : '失败'}：${e.message.slice(0, 400)}`
+      steps.push({ name, ok: soft, detail })
     }
   }
 
@@ -157,10 +178,19 @@ export async function parseProject(
       ['pcb', 'drc', '--format', 'json', '--output', 'drc.json', files.pcb],
       'drcReportPath',
     )
-    // 带 .svg 后缀：pcb export svg 的 --output 是文件名，不写后缀 KiCad 会
-    // 老老实实产出一个叫 `pcb-svg` 的无后缀文件，然后被 SVG 过滤器漏掉。
-    // 某些版本按层导出时又会把它当目录 —— collectSvgs 两种都认。
-    await attempt('pcb-svg', ['pcb', 'export', 'svg', '--output', 'pcb.svg', files.pcb])
+    // --layers 是必须的：不给的话 KiCad 9/10 直接以
+    // 「At least one layer must be specified」退出，一张 SVG 都不产。
+    // --output 在单层模式下是文件名，--mode-multi 下是目录 —— collectSvgs 两种都认。
+    await attempt('pcb-svg', [
+      'pcb',
+      'export',
+      'svg',
+      '--layers',
+      process.env.KICAD_PCB_SVG_LAYERS || DEFAULT_PCB_SVG_LAYERS,
+      '--output',
+      'pcb.svg',
+      files.pcb,
+    ])
     artifacts.pcbSvgPaths = await collectSvgs('pcb.svg')
     steps.push({
       name: 'pcb-svg-collect',

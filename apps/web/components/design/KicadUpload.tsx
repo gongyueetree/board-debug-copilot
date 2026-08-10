@@ -93,8 +93,61 @@ export function KicadUpload({ projectId, readOnly }: { projectId: string; readOn
     return token ? { authorization: `Bearer ${token}` } : {}
   }
 
+  /**
+   * 上传：能直传就直传，直传不可用才回落 base64。
+   *
+   * base64 会把整个文件读进内存再变成 1.33 倍大的字符串发给 API，100MB 的 zip
+   * 走这条路会让浏览器和 Node 两端内存都翻倍。所以默认走
+   * presign → PUT 到对象存储 → complete 登记，API 全程不碰文件内容。
+   *
+   * mock 存储没有真正的直传能力（presign 返回 isFallback=true），那时才回落。
+   */
   const upload = useMutation({
     mutationFn: async (file: File) => {
+      const presign = await fetch(`${API_BASE}/api/v1/projects/${projectId}/kicad/presign`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({
+          filename: file.name,
+          mimeType: file.type || 'application/zip',
+          // 后端拿这个数去签 content-length，所以必须是浏览器看到的真实大小
+          sizeBytes: file.size,
+        }),
+      })
+      const pre = await presign.json()
+      if (!presign.ok) throw new Error(pre.message ?? `预签名失败（${presign.status}）`)
+
+      if (!pre.isFallback) {
+        const put = await fetch(pre.url, {
+          method: 'PUT',
+          // 只带 presign 给的头。content-length 由浏览器按 body 自己算 ——
+          // 手动设会被忽略（fetch 的禁止头），签名反而对不上。
+          headers: pre.headers,
+          // 原始 File 作为 body：不 base64、不 ArrayBuffer 中转，
+          // 大文件走流式，浏览器内存不会翻倍
+          body: file,
+        })
+        if (!put.ok) {
+          throw new Error(
+            `直传对象存储失败（${put.status}）。若是 403 SignatureDoesNotMatch，` +
+              `多半是 content-length 签名兼容问题，见 docs/09 §6`,
+          )
+        }
+
+        const done = await fetch(`${API_BASE}/api/v1/projects/${projectId}/kicad/complete`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            objectKey: pre.objectKey,
+            filename: file.name,
+            sizeBytes: file.size,
+          }),
+        })
+        const body = await done.json()
+        if (!done.ok) throw new Error(body.message ?? `登记失败（${done.status}）`)
+        return body as { status: string; degraded: boolean; message: string }
+      }
+
       const res = await fetch(`${API_BASE}/api/v1/projects/${projectId}/kicad/upload`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', ...authHeaders() },

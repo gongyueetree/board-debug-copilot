@@ -1,0 +1,45 @@
+{
+  "board": {
+    "design_settings": {
+      "defaults": {},
+      "rules": {}
+    }
+  },
+  "meta": {
+    "filename": "multi-sheet.kicad_pro",
+    "version": 3
+  },
+  "net_settings": {
+    "classes": [
+      {
+        "bus_width": 12,
+        "clearance": 0.2,
+        "diff_pair_gap": 0.25,
+        "diff_pair_width": 0.2,
+        "line_style": 0,
+        "microvia_diameter": 0.3,
+        "microvia_drill": 0.1,
+        "name": "Default",
+        "track_width": 0.25,
+        "via_diameter": 0.6,
+        "via_drill": 0.3,
+        "wire_width": 6
+      }
+    ]
+  },
+  "sheets": [
+    [
+      "f74c9c6c-10d2-4168-6734-d4607bfbbe8e",
+      "Root"
+    ],
+    [
+      "c5731722-99d0-45d2-4ae2-2d5b8c7d84cd",
+      "Amplifier"
+    ],
+    [
+      "463cc425-2001-58b1-aa30-53a0482a4082",
+      "Power"
+    ]
+  ],
+  "text_variables": {}
+}

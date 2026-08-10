@@ -19,26 +19,25 @@ import { buildZip, type ZipEntry } from './lib/mini-zip'
 
 const ROOT = join(__dirname, '..', 'examples', 'kicad-fixtures')
 
-interface Expect {
-  hasPro?: boolean
-  hasSch?: boolean
-  hasPcb?: boolean
-  netlist?: boolean
-  erc?: boolean
-  drc?: boolean
-  minComponents?: number
-  minNets?: number
-  minSchematicSvgs?: number
-  minPcbSvgs?: number
-  mustNotCrash?: boolean
-  parseLogMentions?: string[]
-}
-
 interface Manifest {
+  name: string
+  description?: string
   status: 'placeholder' | 'ready'
   kicadVersion?: string
-  description?: string
-  expect: Expect
+  expectedComponentsMin?: number
+  expectedNetsMin?: number
+  /** 精确值：多页原理图导出几张就该入库几张，多一张少一张都是 bug */
+  expectedSchematicSvgCount?: number
+  expectedPcbSvgCount?: number
+  expectedMode?: 'cli' | 'mock'
+  /** CLI 单步失败（ERC 有告警、DRC 挂死）不算 fixture 失败 */
+  allowWarnings?: boolean
+  shouldNotCrash?: boolean
+  expectNetlist?: boolean
+  expectErc?: boolean
+  expectDrc?: boolean
+  parseLogMentions?: string[]
+  notes?: string
 }
 
 // ------------------------------------------------------------- 内存替身
@@ -183,51 +182,47 @@ async function runFixture(name: string): Promise<Result> {
     }
   }
 
-  const e = manifest.expect
+  const m = manifest
   const fail: string[] = []
   const log = outcome.log
   const kinds = prisma.state.projectFiles.map((f) => f.kind as string)
   const schSvgs = kinds.filter((k) => k === 'SCHEMATIC').length
   const pcbSvgs = kinds.filter((k) => k === 'PCB').length
 
-  const locate = /locate: pro=(.) sch=(.) pcb=(.)/.exec(log)
-  const found = { pro: locate?.[1] === '✓', sch: locate?.[2] === '✓', pcb: locate?.[3] === '✓' }
-
   const check = (cond: boolean, msg: string) => {
     if (!cond) fail.push(msg)
   }
+  const eq = (actual: number, want: number | undefined, label: string) => {
+    if (want !== undefined) check(actual === want, `${label} ${actual}，期望 ${want}`)
+  }
+  const atLeast = (actual: number, want: number | undefined, label: string) => {
+    if (want !== undefined) check(actual >= want, `${label} ${actual} < ${want}`)
+  }
+  const has = (kind: string, want: boolean | undefined, label: string) => {
+    if (want !== undefined) check(kinds.includes(kind) === want, `${label} 产物应为 ${want}`)
+  }
 
-  if (e.hasPro !== undefined) check(found.pro === e.hasPro, `.kicad_pro 识别应为 ${e.hasPro}`)
-  if (e.hasSch !== undefined) check(found.sch === e.hasSch, `.kicad_sch 识别应为 ${e.hasSch}`)
-  if (e.hasPcb !== undefined) check(found.pcb === e.hasPcb, `.kicad_pcb 识别应为 ${e.hasPcb}`)
+  if (m.expectedMode) check(outcome.mode === m.expectedMode, `mode=${outcome.mode}，期望 ${m.expectedMode}`)
+  atLeast(outcome.components, m.expectedComponentsMin, '组件数')
+  atLeast(outcome.nets, m.expectedNetsMin, '网络数')
+  // SVG 用精确值：多页原理图导出几张就该入库几张，多一张（把 notes.txt 也算进去）
+  // 或少一张（目录没扫）都是真 bug
+  eq(schSvgs, m.expectedSchematicSvgCount, '原理图 SVG')
+  eq(pcbSvgs, m.expectedPcbSvgCount, 'PCB SVG')
+  has('NETLIST', m.expectNetlist, 'netlist')
+  has('ERC_REPORT', m.expectErc, 'ERC')
+  has('DRC_REPORT', m.expectDrc, 'DRC')
 
-  if (e.netlist !== undefined) {
-    check(kinds.includes('NETLIST') === e.netlist, `netlist 产物应为 ${e.netlist}`)
-  }
-  if (e.erc !== undefined) check(kinds.includes('ERC_REPORT') === e.erc, `ERC 报告应为 ${e.erc}`)
-  if (e.drc !== undefined) check(kinds.includes('DRC_REPORT') === e.drc, `DRC 报告应为 ${e.drc}`)
-
-  if (e.minComponents !== undefined) {
-    check(
-      outcome.components >= e.minComponents,
-      `组件数 ${outcome.components} < ${e.minComponents}`,
-    )
-  }
-  if (e.minNets !== undefined) {
-    check(outcome.nets >= e.minNets, `网络数 ${outcome.nets} < ${e.minNets}`)
-  }
-  if (e.minSchematicSvgs !== undefined) {
-    check(schSvgs >= e.minSchematicSvgs, `原理图 SVG ${schSvgs} < ${e.minSchematicSvgs}`)
-  }
-  if (e.minPcbSvgs !== undefined) {
-    check(pcbSvgs >= e.minPcbSvgs, `PCB SVG ${pcbSvgs} < ${e.minPcbSvgs}`)
-  }
-  if (e.mustNotCrash) {
+  if (m.shouldNotCrash) {
     // parseLog 是失败时唯一的线索，空日志等于没有线索
+    check(outcome.status === 'READY' || outcome.status === 'ERROR', '返回了非法 status')
     check(log.trim().length > 0, 'parseLog 为空')
     check(/\[(OK |ERR|WARN)\]/.test(log), 'parseLog 不是可读的分步格式')
   }
-  for (const needle of e.parseLogMentions ?? []) {
+  if (m.allowWarnings === false && /\[(ERR|WARN)\]/.test(log)) {
+    fail.push('parseLog 里有告警/错误，但 allowWarnings=false')
+  }
+  for (const needle of m.parseLogMentions ?? []) {
     check(log.toLowerCase().includes(needle.toLowerCase()), `parseLog 未提到「${needle}」`)
   }
 

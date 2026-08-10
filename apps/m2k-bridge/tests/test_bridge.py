@@ -271,3 +271,17 @@ def test_real_adapter_rejects_unimplemented_waveform():
             AwgConfig(channel="W1", wave="square", freq_hz=1000.0, amplitude_vpp=0.4, offset_v=0.0)
         )
     assert exc.value.code == "WAVEFORM_UNSUPPORTED"
+
+
+def test_real_adapter_enumeration_names_the_real_cause():
+    """没装 libm2k 时枚举设备要说「库没装」，不能报「没有设备」。
+
+    返回空列表会让人去查 USB 线和 Scopy 占用，方向完全错了。
+    """
+    from src.adapters import AdapterError
+    from src.adapters.real_m2k import RealM2kAdapter
+
+    with pytest.raises(AdapterError) as exc:
+        RealM2kAdapter().list_devices()
+    assert exc.value.code == "LIBM2K_MISSING"
+    assert "libm2k" in str(exc.value)

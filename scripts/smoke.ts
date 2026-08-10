@@ -286,6 +286,102 @@ const authChecks: Check[] = [
     },
   },
   {
+    name: 'auth upload-fallback 不能写公共 Demo',
+    run: async () => {
+      // 这条路由是 mock 存储的直传回落。它能往任意 projects/<id>/ 下写文件，
+      // 所以归属规则必须和业务写操作一模一样。
+      const res = await fetch(`${API}/api/v1/files/upload-fallback`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          objectKey: `projects/${PROJECT}/kicad/smoke-should-fail.zip`,
+          kind: 'zip',
+          mimeType: 'application/zip',
+          base64: 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==',
+        }),
+      })
+      expect(res.status === 403, `期望 403，实得 ${res.status}`)
+      return '403，公共 Demo 只读'
+    },
+  },
+  {
+    name: 'auth upload-fallback 不能写别人的项目',
+    run: async () => {
+      expect(!!smokeState.mine, '上一步没有克隆出项目')
+      const { token } = await postJson(`${API}/api/v1/auth/login`, {
+        email: 'smoke-stranger@bdc.test',
+      })
+      const res = await fetch(`${API}/api/v1/files/upload-fallback`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          objectKey: `projects/${smokeState.mine}/kicad/stranger.zip`,
+          kind: 'zip',
+          mimeType: 'application/zip',
+          base64: 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==',
+        }),
+      })
+      expect(res.status === 403, `期望 403，实得 ${res.status}`)
+      return '403，他人项目不可写'
+    },
+  },
+  {
+    name: 'auth upload-fallback 不存在的项目被拒',
+    run: async () => {
+      const res = await fetch(`${API}/api/v1/files/upload-fallback`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          objectKey: 'projects/11111111-1111-1111-1111-111111111111/kicad/x.zip',
+          kind: 'zip',
+          mimeType: 'application/zip',
+          base64: 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==',
+        }),
+      })
+      // 放行的话就是「往任意 uuid 下写文件」
+      expect(res.status === 404, `期望 404，实得 ${res.status}`)
+      return '404，项目不存在'
+    },
+  },
+  {
+    name: 'storage 坏 MIME 与超限被拒',
+    run: async () => {
+      expect(!!smokeState.mine && !!smokeState.tokenA, '没有可写的项目')
+      const auth = { authorization: `Bearer ${smokeState.tokenA}` }
+      const bad = await fetch(`${API}/api/v1/files/upload-fallback`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...auth },
+        body: JSON.stringify({
+          objectKey: `projects/${smokeState.mine}/kicad/bad.zip`,
+          kind: 'zip',
+          mimeType: 'text/html',
+          base64: 'UEsFBgAAAAAAAAAAAAAAAAAAAAAAAA==',
+        }),
+      })
+      expect(bad.status === 400, `坏 MIME 期望 400，实得 ${bad.status}`)
+
+      const limits = await json(`${API}/api/v1/files/limits/all`)
+      expect(limits.zip.maxBytes > 0, 'limits 没返回 zip 上限')
+      return `坏 MIME 400，zip 上限 ${limits.zip.maxBytes / 1024 / 1024}MB`
+    },
+  },
+  {
+    name: 'storage presign 签的是确切大小',
+    run: async () => {
+      expect(!!smokeState.mine && !!smokeState.tokenA, '没有可写的项目')
+      const pre = await postJson(
+        `${API}/api/v1/projects/${smokeState.mine}/kicad/presign`,
+        { filename: 'demo.zip', mimeType: 'application/zip', sizeBytes: 4096 },
+        smokeState.tokenA,
+      )
+      expect(!!pre.objectKey, 'presign 没返回 objectKey')
+      // mock 存储没有真直传，isFallback=true；s3 下 URL 里应能看到签名
+      if (pre.isFallback) return 'mock 存储：回落到 base64（预期）'
+      expect(decodeURIComponent(pre.url).includes('content-length'), 'content-length 没进签名')
+      return 's3：content-length 已签进 URL'
+    },
+  },
+  {
     name: 'health 报告存储状态',
     run: async () => {
       const d = await json(`${API}/health`)

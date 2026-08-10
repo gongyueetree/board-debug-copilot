@@ -1,16 +1,17 @@
 {
-  "status": "placeholder",
-  "kicadVersion": "9.0",
-  "description": "只有 PCB 没有原理图：缺 netlist 不算失败",
-  "expect": {
-    "hasPro": true,
-    "hasSch": false,
-    "hasPcb": true,
-    "netlist": false,
-    "erc": false,
-    "drc": true,
-    "minPcbSvgs": 1,
-    "minComponents": 0,
-    "mustNotCrash": true
-  }
+  "name": "pcb-only-demo",
+  "description": "只有 .kicad_pcb 没有原理图：缺 netlist 与 ERC 是预期行为，不是失败",
+  "status": "ready",
+  "kicadVersion": "10.0.1",
+  "expectedComponentsMin": 0,
+  "expectedNetsMin": 0,
+  "expectedSchematicSvgCount": 0,
+  "expectedPcbSvgCount": 1,
+  "expectedMode": "mock",
+  "allowWarnings": true,
+  "shouldNotCrash": true,
+  "expectNetlist": false,
+  "expectErc": false,
+  "expectDrc": false,
+  "notes": "expectedMode=mock：没有 netlist 就没有结构化数据，走降级分支保留现有设计"
 }

@@ -1,18 +1,17 @@
 {
-  "status": "placeholder",
-  "kicadVersion": "9.0",
-  "description": "单页反相放大器：解析链路的基线用例",
-  "expect": {
-    "hasPro": true,
-    "hasSch": true,
-    "hasPcb": true,
-    "netlist": true,
-    "erc": true,
-    "drc": true,
-    "minComponents": 5,
-    "minNets": 4,
-    "minSchematicSvgs": 1,
-    "minPcbSvgs": 1,
-    "mustNotCrash": true
-  }
+  "name": "simple-inverting-amp",
+  "description": "单页反相放大器：AD8605 + Rin 10k + Rf 100k + 去耦 + 两个测试点。解析链路的基线用例",
+  "status": "ready",
+  "kicadVersion": "10.0.1",
+  "expectedComponentsMin": 6,
+  "expectedNetsMin": 6,
+  "expectedSchematicSvgCount": 1,
+  "expectedPcbSvgCount": 1,
+  "expectedMode": "cli",
+  "allowWarnings": true,
+  "shouldNotCrash": true,
+  "expectNetlist": true,
+  "expectErc": true,
+  "expectDrc": false,
+  "notes": "expectDrc=false 是因为 KiCad 10.0.1 的 pcb drc 会挂死（见 docs/08 §6），不是板子有问题"
 }

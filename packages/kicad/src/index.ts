@@ -27,6 +27,7 @@ export {
 
 export {
   parseKicadArchive,
+  pickRoot,
   type ArchiveDeps,
   type ArchiveOutcome,
   type StorageLike,

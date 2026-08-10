@@ -1,10 +1,18 @@
 {
-  "status": "placeholder",
-  "kicadVersion": "9.0",
-  "description": "缺符号/封装库：必须降级并写清 parseLog，不能崩",
-  "expect": {
-    "hasSch": true,
-    "mustNotCrash": true,
-    "parseLogMentions": ["erc"]
-  }
+  "name": "broken-missing-libs",
+  "description": "引用不存在的符号库：必须降级并写清 parseLog，不能崩",
+  "status": "ready",
+  "kicadVersion": "10.0.1",
+  "expectedComponentsMin": 1,
+  "expectedNetsMin": 1,
+  "expectedSchematicSvgCount": 1,
+  "expectedPcbSvgCount": 0,
+  "expectedMode": "cli",
+  "allowWarnings": true,
+  "shouldNotCrash": true,
+  "expectNetlist": true,
+  "expectErc": true,
+  "expectDrc": false,
+  "parseLogMentions": ["erc"],
+  "notes": "通过标准不是解析成功，而是没崩且 parseLog 说清了发生什么"
 }

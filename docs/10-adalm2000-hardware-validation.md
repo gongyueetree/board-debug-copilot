@@ -3,6 +3,9 @@
 `apps/m2k-bridge/src/adapters/real_m2k.py` 至今**没有在真实 ADALM2000 上跑过
 一次**。代码结构完整、失败分支明确，但那不等于它能用。
 
+**当前状态：NOT RUN**（2026-08-09 核对：本机没有 ADALM2000，也没装 libm2k /
+libiio，见第 7 节）。
+
 这份文档是把它从「实验性」改成「已验证」需要走完的流程。**在整份 checklist
 跑完并把结果填进第 7 节之前，`hardwareVerified` 必须保持 `false`。**
 
@@ -116,7 +119,7 @@ curl -s -X POST -H "authorization: Bearer $TOKEN" http://127.0.0.1:3777/devices/
 | 现象 | 原因 |
 | --- | --- |
 | `NO_DEVICE` | 没插、没权限、或 Scopy 占着 |
-| `LIBM2K_MISSING` | 绑定没装进当前解释器 |
+| `LIBM2K_MISSING` | 绑定没装进当前解释器。`/devices` 也会报这个而不是「空列表」—— 空列表会把人引去查 USB 线 |
 | 连上但 `serial` 为空 | `getSerialNumber` 的返回形状和假设不同 → **记下来，要改代码** |
 | 超时 | USB 线是充电线不是数据线（真的很常见） |
 
@@ -273,14 +276,40 @@ curl -s -X POST http://127.0.0.1:3777/emergency-stop
 ```bash
 cd apps/m2k-bridge
 . .venv/bin/activate
-python scripts/hardware_smoke.py --report ../../hardware-report.json
+
+# 1) 只读检查（不开任何输出）
+BRIDGE_TOKEN=<token> python scripts/hardware_smoke.py \
+  --report hardware-report-readonly.json
+
+# 2) loopback（W1 直连 CH1，会真的开 0.4Vpp 输出，需二次确认）
+BRIDGE_TOKEN=<token> python scripts/hardware_smoke.py --loopback \
+  --report hardware-report-loopback.json
 ```
 
-它跑第 2、3、5 节里能自动化的部分：状态、设备列表、配对拦截、急停、
-scope 配置、波形拦截。**默认不开任何输出**；要做 loopback 得显式加
-`--loopback`，并且会先要求确认。
+> **token 用环境变量传。** 配对 token 是 base64url，可能以 `-` 开头，
+> `--token <值>` 会被 argparse 当成选项名。要么用 `BRIDGE_TOKEN`，
+> 要么写 `--token=<值>` 的等号形式。
 
-不接硬件时它会清晰地失败并说明原因，不会崩。
+怎么拿 token：
+
+```bash
+curl -sX POST http://127.0.0.1:3777/pairing/start      # Bridge 控制台打印 6 位码
+curl -sX POST http://127.0.0.1:3777/pairing/verify \
+  -H 'content-type: application/json' -d '{"code":"123456"}'
+```
+
+它跑第 2、3、5 节里能自动化的部分：状态、配对拦截、急停、token 有效性、
+设备列表、连接、scope 配置、波形拦截、幅度上限。**默认不开任何输出**；
+要做 loopback 得显式加 `--loopback`，并且会先要求确认。
+
+不接硬件时它会清晰地失败并说明原因，不会崩。已验过的三条失败路径：
+
+| 情况 | 表现 |
+| --- | --- |
+| Bridge 没起 | `连不上 Bridge（…）：Connection refused` + 启动命令，退出码 2 |
+| token 无效/过期 | `配对 token 有效 ✗ 401 NOT_PAIRED` + 重新配对步骤，后续检查全跳过 |
+| 没装 libm2k | `/devices` 返回 503 `LIBM2K_MISSING` 并指向本文 §1，不会报成「没有设备」 |
+| 装了库但没插设备 | `/devices` 返回空列表，检查失败后停住，不继续跑硬件项 |
 
 输出是 JSON 报告，直接贴进第 7 节。
 
@@ -292,7 +321,39 @@ python scripts/hardware_smoke.py --help
 
 ## 7. 记录表
 
-跑完把结果填在这里。**这张表空着，就说明还没验证过。**
+### 当前状态：NOT RUN
+
+最近一次核对：**2026-08-09**
+
+```
+操作系统：      macOS 26.5.2 (arm64)
+Python：        3.11.4
+libiio：        未安装（iio_info 不在 PATH）
+libm2k：        未安装（ModuleNotFoundError: No module named 'libm2k'）
+ADALM2000：     未连接（USB 枚举无 Analog Devices 设备）
+```
+
+因此下面的记录表**一项都没跑**。已经能确认的只有「不接硬件时脚本行为正确」：
+
+```
+$ BRIDGE_MOCK=false BRIDGE_REQUIRE_PAIRING=true uvicorn src.main:app --port 3781
+$ BRIDGE_TOKEN=<token> python scripts/hardware_smoke.py --base http://127.0.0.1:3781
+
+  ✓ /status 报告真实适配器      adapter=real connected=False | libm2k 未安装：No module named 'libm2k'
+  ✓ 未配对拒绝 GET /devices     HTTP 401 code=NOT_PAIRED
+  ✓ 未配对拒绝 POST /scope      HTTP 401 code=NOT_PAIRED
+  ✓ 未配对拒绝 POST /awg        HTTP 401 code=NOT_PAIRED
+  ✓ 急停无需 token 且返回 stopped HTTP 200 {'stopped': True}
+  ✓ 配对 token 有效             HTTP 503
+  ✗ /devices 列出设备           HTTP 503 {'code': 'LIBM2K_MISSING',
+                                'message': "libm2k 未安装，无法枚举设备…安装步骤见 docs/10 §1"}
+
+6/7 通过
+```
+
+**这不是硬件验证。** 它证明的是安全边界与脚本本身可用，不是 ADALM2000 能工作。
+
+### 拿到硬件后填这里
 
 ```
 日期：
@@ -325,6 +386,8 @@ ADALM2000 固件版本：
 | 5 · 未配对无法控制 | ☐ | |
 | 5 · emergency-stop 无需 token 且真的停 | ☐ | |
 | 5 · 拔 USB 后不崩、输出停 | ☐ | |
+
+上面每一项目前都是 ☐（未执行）。
 
 ### 能不能把 hardwareVerified 改成 true
 

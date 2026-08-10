@@ -4,6 +4,33 @@
 AI 智能体综合**设计上下文 + 元器件知识 + 测量数据 + 视觉信息**，
 输出设计审查、调试计划、故障诊断和调试报告。
 
+## 真实链路验证状态
+
+「测试脚本通过」不等于「真实链路已验证」。下表只有三种取值：
+**VERIFIED**（对着真实依赖跑过）/ **NOT RUN**（没跑过）/ **EXPERIMENTAL**（能跑但未验证）。
+
+| 链路 | 状态 | 依据 |
+| --- | --- | --- |
+| Mock Demo（6 个页面 + 智能体） | ✅ VERIFIED | CI `集成` job：`pnpm smoke` 33/33、`pnpm test:agent` 12/12 |
+| 单元测试 | ✅ VERIFIED | CI `类型/构建/单元测试` job：`pnpm test` 122 项 |
+| MinIO 对象存储 | ✅ VERIFIED | CI `存储（MinIO 端到端）` job：`pnpm test:storage-real` 7/7 |
+| **KiCad CLI 解析（10.0.1 / macOS）** | ✅ **VERIFIED** | `pnpm test:kicad-real` 4/4 真实工程，2026-08-09，详见 [docs/08](docs/08-real-kicad-validation.md) §4 |
+| KiCad CLI 其它版本（6/7/8/9）与 Linux/Windows | ⬜ NOT RUN | 装好对应版本后跑 `pnpm test:kicad-real`，结果填 docs/08 §4 |
+| Cloudflare R2 | ⬜ NOT RUN | `cp .env.r2.example .env.r2` 填好后跑 `pnpm test:storage-real`，见 [docs/09](docs/09-storage-validation.md) §3 |
+| AWS S3 | ⬜ NOT RUN | 同上，配置见 [docs/09](docs/09-storage-validation.md) §4 |
+| **浏览器直传**到真实对象存储 | ⬜ NOT RUN | `pnpm test:storage-real` 在 Node 里跑，不经过 CORS。见 [docs/09](docs/09-storage-validation.md) §6 |
+| ADALM2000 Mock Bridge | ✅ VERIFIED | CI `Bridge (pytest)` job：24 项 + 冒烟里的危险操作拦截 |
+| **ADALM2000 真实硬件** | ⚠️ **EXPERIMENTAL / NOT RUN** | 没有硬件也没装 libm2k。checklist 见 [docs/10](docs/10-adalm2000-hardware-validation.md)，`hardwareVerified` 保持 `false` |
+| 真实 LLM（Gemini） | ✅ VERIFIED | `LLM_PROVIDER=gemini pnpm test:agent` 11/11（早期验证） |
+
+逐步接上真实依赖的三条命令，缺依赖时都会 SKIPPED 而不是失败：
+
+```bash
+pnpm test:kicad-real     # 需要 kicad-cli        → docs/08
+pnpm test:storage-real   # 需要 MinIO/R2/S3      → docs/09
+cd apps/m2k-bridge && python scripts/hardware_smoke.py   # 需要 ADALM2000 → docs/10
+```
+
 ## 快速开始
 
 ```bash
@@ -149,16 +176,15 @@ SSE 事件是否成流、Bridge 的危险操作是否被拦，以及写操作鉴
 
 ## 逐步接入真实依赖
 
-这三条默认都会 SKIPPED，装了对应依赖才真正跑起来：
+三条命令见文首状态表。CI 里：`test:kicad-real` 跳过（runner 上没有 KiCad），
+`test:storage-real` 有单独一个 job 用本地 MinIO 真跑，真实硬件那条只能人工跑。
+
+macOS 上 kicad-cli 不在 PATH，要显式指过去：
 
 ```bash
-pnpm test:kicad-real     # 真实 KiCad 工程解析，需要 kicad-cli   → docs/08
-pnpm test:storage-real   # 真实 S3 兼容存储，需要 MinIO/R2/S3    → docs/09
-cd apps/m2k-bridge && python scripts/hardware_smoke.py   # 真实 ADALM2000 → docs/10
+export KICAD_CLI="/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli"
+pnpm test:kicad-real
 ```
-
-前两条已经接进 CI（CI 上没有 KiCad 所以跳过；MinIO 有单独一个 job 真跑）。
-真实硬件那条只能人工跑，checklist 在 docs/10。
 
 ## 本地 Bridge
 

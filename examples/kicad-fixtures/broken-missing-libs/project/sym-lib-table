@@ -1,0 +1,4 @@
+(sym_lib_table
+  (version 7)
+  (lib (name "NoSuchLib")(type "KiCad")(uri "${KIPRJMOD}/libs/nosuchlib.kicad_sym")(options "")(descr "故意指向不存在的库"))
+)

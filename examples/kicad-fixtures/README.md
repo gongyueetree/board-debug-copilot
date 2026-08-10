@@ -8,10 +8,12 @@
 
 ## 现状
 
-四个 fixture 目前**都是占位**：只有 `manifest.json` 与说明，没有真实工程文件。
-`pnpm test:kicad-real` 会把它们逐个报成 `PLACEHOLDER`，不会假装通过。
+四个 fixture 都有真实工程文件，并且**已在 kicad-cli 10.0.1 上跑通 4/4**
+（macOS，2026-08-09，见 `docs/08-real-kicad-validation.md` §4）。
 
-放进真实工程文件后，运行器自动开始对它做断言 —— 不需要改代码。
+文件是手写 s-expression 后用真实 kicad-cli 逐个验证出来的，不是从 GUI 存的。
+连接全部用同名标签，不布线 —— 手写坐标最容易错的就是「两条线差 0.01mm
+没接上」。
 
 ## 目录约定
 
@@ -35,27 +37,35 @@ Component/Net/Pin → ERC/DRC 转 RuleViolation。
 
 ```jsonc
 {
-  "status": "placeholder",        // 放进真实工程后改成 "ready"
-  "kicadVersion": "9.0",          // 工程用哪个版本存的
-  "description": "单页反相放大器，最小可解析工程",
-  "expect": {
-    "hasPro": true,               // 能识别 .kicad_pro
-    "hasSch": true,
-    "hasPcb": true,
-    "minComponents": 5,           // netlist 至少解析出几个组件
-    "minNets": 4,
-    "minSchematicSvgs": 1,        // 至少保存几个原理图 SVG
-    "minPcbSvgs": 1,
-    "netlist": true,              // 必须导出 netlist
-    "erc": true,                  // 必须产出 ERC 报告
-    "drc": true,
-    "mustNotCrash": true          // 解析失败也必须返回 parseLog 而不是抛异常
-  }
+  "name": "simple-inverting-amp",
+  "description": "单页反相放大器：解析链路的基线用例",
+  "status": "ready",                 // 还没放工程文件时写 "placeholder"
+  "kicadVersion": "10.0.1",          // 用哪个版本验过
+
+  "expectedComponentsMin": 6,        // netlist 至少解析出几个组件（下限）
+  "expectedNetsMin": 6,              // 至少几个网络（下限）
+  "expectedSchematicSvgCount": 1,    // 原理图 SVG 张数（精确值）
+  "expectedPcbSvgCount": 1,          // PCB SVG 张数（精确值）
+  "expectedMode": "cli",             // cli = 走通了 CLI；mock = 降级
+  "allowWarnings": true,             // false 则 parseLog 里出现 WARN/ERR 即失败
+  "shouldNotCrash": true,            // 必须返回 status + 可读 parseLog，不能抛
+
+  "expectNetlist": true,             // 必须产出 netlist
+  "expectErc": true,
+  "expectDrc": false,                // KiCad 10 的 pcb drc 会挂死，见 docs/08 §6
+  "parseLogMentions": ["erc"],       // parseLog 里必须出现的关键词
+  "notes": "为什么这么写"
 }
 ```
 
-`expect` 里没写的字段一律不断言。缺库、缺 PCB 这类 fixture 就是靠把对应字段
-写成 `false` 或 `0` 来表达预期的。
+**SVG 用精确值而不是下限**：多导出一张（把目录里的 `notes.txt` 也当成产物）
+和少导出一张（目录没扫）都是真 bug，写下限会把前者放过去。
+
+组件/网络用下限：KiCad 版本之间对「算不算一个网络」偶有差异，卡死精确值
+会让 fixture 变成版本探测器而不是回归测试。
+
+没写的字段一律不断言。缺库、缺 PCB 这类 fixture 就是靠把对应字段写成
+`false` 或 `0` 来表达预期的。
 
 ## 四个 fixture 各自验证什么
 
@@ -68,7 +78,7 @@ Component/Net/Pin → ERC/DRC 转 RuleViolation。
 
 ## 怎么造 fixture
 
-1. 用 KiCad 9 新建工程，画到刚好够验证目标为止 —— 越小越好，仓库里不需要
+1. 用 KiCad 新建工程，画到刚好够验证目标为止 —— 越小越好，仓库里不需要
    一块真实产品板。
 2. 存盘后把工程目录整个复制到 `<fixture>/project/`。
 3. **删掉 `-backups/`、`fp-info-cache`、`*.kicad_prl`**：那是本地状态，不该进仓库。

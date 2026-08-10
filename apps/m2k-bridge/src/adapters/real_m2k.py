@@ -109,7 +109,12 @@ class RealM2kAdapter:
 
     def list_devices(self) -> list[dict]:
         if libm2k is None:
-            return []
+            # 不能返回空列表：操作者会看到「没发现设备」，然后去查 USB 线、
+            # 查 Scopy 有没有占用，而真正的原因是库根本没装。
+            raise AdapterError(
+                f"libm2k 未安装，无法枚举设备：{_IMPORT_ERROR}。安装步骤见 docs/10 §1",
+                "LIBM2K_MISSING",
+            )
         try:
             uris = libm2k.getAllContexts()
         except Exception as exc:  # pragma: no cover - depends on host

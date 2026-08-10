@@ -11,9 +11,13 @@ Safety: no output is enabled by default. The loopback test (W1 -> CH1) needs
 with zero offset - the same values the built-in demo uses. Anything above 5Vpp
 or with a DC offset is deliberately out of scope for this script.
 
-    python scripts/hardware_smoke.py                       # 只读检查
-    python scripts/hardware_smoke.py --loopback            # 额外做 W1->CH1
-    python scripts/hardware_smoke.py --report out.json     # 存 JSON 报告
+    python scripts/hardware_smoke.py                        # 只读检查
+    BRIDGE_TOKEN=<token> python scripts/hardware_smoke.py   # 带配对 token
+    python scripts/hardware_smoke.py --loopback             # 额外做 W1->CH1
+    python scripts/hardware_smoke.py --report out.json      # 存 JSON 报告
+
+配对 token 是 base64url，可能以 `-` 开头，argparse 会把它当成选项。所以要么用
+BRIDGE_TOKEN 环境变量（推荐），要么写成 `--token=<token>` 的等号形式。
 
 Exits non-zero if any check fails, so it can gate a manual validation run.
 """
@@ -22,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from dataclasses import dataclass, field
@@ -130,6 +135,23 @@ def check_emergency_stop(b: Bridge) -> Check:
     status, payload = anon.request("POST", "/emergency-stop", auth=False)
     ok = status == 200 and isinstance(payload, dict) and payload.get("stopped") is True
     return Check("急停无需 token 且返回 stopped", ok, f"HTTP {status} {payload}")
+
+
+def check_token(b: Bridge) -> Check:
+    """先确认 token 本身有效。
+
+    token 过期时后面每一项都会 401，输出成一串「设备列不出来」，
+    读起来像硬件坏了。先单独报一句，省得照着错方向排查。
+    """
+    status, payload = b.request("GET", "/devices")
+    if status == 401:
+        return Check(
+            "配对 token 有效",
+            False,
+            "401 NOT_PAIRED —— token 无效或已过期，重新走一次 "
+            "POST /pairing/start → 看 Bridge 控制台的 6 位码 → POST /pairing/verify",
+        )
+    return Check("配对 token 有效", True, f"HTTP {status}")
 
 
 def check_devices(b: Bridge) -> tuple[Check, list]:
@@ -259,7 +281,13 @@ def check_loopback(b: Bridge) -> list[Check]:
 def main() -> int:
     ap = argparse.ArgumentParser(description="ADALM2000 真实硬件冒烟检查")
     ap.add_argument("--base", default=DEFAULT_BASE, help=f"Bridge 地址（默认 {DEFAULT_BASE}）")
-    ap.add_argument("--token", help="配对 token。不给就只跑不需要 token 的检查")
+    # token 可能以 - 开头（base64url），`--token <值>` 会被 argparse 当成选项。
+    # 用 BRIDGE_TOKEN 环境变量或 `--token=<值>` 都能绕开。
+    ap.add_argument(
+        "--token",
+        default=os.getenv("BRIDGE_TOKEN"),
+        help="配对 token（也可用 BRIDGE_TOKEN 环境变量）。不给就只跑不需要 token 的检查",
+    )
     ap.add_argument("--loopback", action="store_true", help="额外做 W1->CH1，会真的开输出")
     ap.add_argument("--report", help="把 JSON 报告写到这个文件")
     args = ap.parse_args()
@@ -282,6 +310,14 @@ def main() -> int:
             print("  ! 没给 --token，跳过所有需要配对的检查")
             print("    先 POST /pairing/start，看 Bridge 控制台的 6 位码，再 POST /pairing/verify\n")
         else:
+            tok = check_token(bridge)
+            checks.append(tok)
+            if not tok.ok:
+                for c in checks:
+                    print(f"  {'✓' if c.ok else '✗'} {c.name:<38} {c.detail}")
+                print("\n配对失败，后续硬件检查全部跳过。")
+                return 1
+
             c, devices = check_devices(bridge)
             checks.append(c)
             if devices:

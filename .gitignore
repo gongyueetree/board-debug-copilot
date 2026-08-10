@@ -14,7 +14,16 @@ out/
 
 .env
 .env.*
+# 只放占位值的模板要留在仓库里；真实凭据一律走 .env / .env.r2 这类被忽略的文件
 !.env.example
+!.env.r2.example
+
+# kicad-cli / KiCad GUI 跑一次就会在工程目录里留下这些本地状态。
+# 它们不是工程的一部分，提交进去只会在每次跑 test:kicad-real 后产生噪声 diff。
+*.kicad_prl
+~*.lck
+**/-backups/
+**/fp-info-cache
 
 .vercel/
 .railway/

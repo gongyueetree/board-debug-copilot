@@ -12,7 +12,7 @@
 import { chmodSync } from 'node:fs'
 import { join } from 'node:path'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { parseKicadArchive } from '../src'
+import { parseKicadArchive, pickRoot } from '../src'
 import { buildZip } from '../../../scripts/lib/mini-zip'
 
 const FAKE_CLI = join(__dirname, '../../../scripts/fixtures/fake-kicad-cli.mjs')
@@ -231,5 +231,43 @@ describe('parseKicadArchive · 有 kicad-cli', () => {
       expect(outcome.log).toContain(step)
     }
     expect(outcome.log).toMatch(/\[(OK |ERR|WARN)\]/)
+  })
+})
+
+describe('pickRoot', () => {
+  // 真实的层次化工程有多个 .kicad_sch。随手 find() 到子图不会报错，
+  // 只是安静地少一半器件、少几页 SVG —— 这个 bug 是 multi-sheet fixture
+  // 在真 KiCad 上跑出来的。
+  it('多个 sch 时按 .kicad_pro 同名挑根图', () => {
+    const files = ['p/amp.kicad_sch', 'p/psu.kicad_sch', 'p/board.kicad_sch', 'p/board.kicad_pro']
+    expect(pickRoot(files, '.kicad_sch', 'p/board.kicad_pro')).toBe('p/board.kicad_sch')
+  })
+
+  it('只有一个候选时直接返回，不做多余判断', () => {
+    expect(pickRoot(['p/only.kicad_sch'], '.kicad_sch', undefined)).toBe('p/only.kicad_sch')
+  })
+
+  it('没有候选返回 undefined', () => {
+    expect(pickRoot(['p/board.kicad_pcb'], '.kicad_sch', undefined)).toBeUndefined()
+  })
+
+  it('没有 pro 时退回层级最浅的', () => {
+    const files = ['sub/deep/child.kicad_sch', 'root.kicad_sch', 'sub/other.kicad_sch']
+    expect(pickRoot(files, '.kicad_sch', undefined)).toBe('root.kicad_sch')
+  })
+
+  it('同层级时取名字最短的，结果稳定', () => {
+    const files = ['a/aaa-sub.kicad_sch', 'a/top.kicad_sch']
+    expect(pickRoot(files, '.kicad_sch', undefined)).toBe('a/top.kicad_sch')
+  })
+
+  it('pro 名字对不上任何 sch 时不硬凑，退回层级规则', () => {
+    const files = ['p/amp.kicad_sch', 'p/psu.kicad_sch']
+    expect(pickRoot(files, '.kicad_sch', 'p/unrelated.kicad_pro')).toBe('p/amp.kicad_sch')
+  })
+
+  it('pcb 走同一套规则', () => {
+    const files = ['p/panel.kicad_pcb', 'p/board.kicad_pcb', 'p/board.kicad_pro']
+    expect(pickRoot(files, '.kicad_pcb', 'p/board.kicad_pro')).toBe('p/board.kicad_pcb')
   })
 })

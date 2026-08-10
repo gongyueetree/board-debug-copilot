@@ -131,6 +131,12 @@ if (domain === 'pcb' && verb === 'drc') {
 }
 
 if (domain === 'pcb' && verb === 'export' && argv[2] === 'svg') {
+  // 真 kicad-cli（9/10）不给 --layers 会直接退出，假 CLI 必须一样，
+  // 否则「忘了传 --layers」这个 bug 在 CI 里照样测不出来
+  if (!argv.includes('--layers')) {
+    process.stderr.write('At least one layer must be specified\n')
+    process.exit(1)
+  }
   const out = outputArg() ?? 'pcb.svg'
   if (MODE === 'pcb-dir') {
     // 按层导出时 --output 会被当成目录

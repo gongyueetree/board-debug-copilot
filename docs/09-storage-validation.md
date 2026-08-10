@@ -13,12 +13,13 @@
 | objectKey 安全校验（前缀、`..`、控制字符） | ✅ 单元测试覆盖 |
 | 生产禁用 mock 的启动校验 | ✅ 单元测试覆盖 |
 | S3 adapter 对真实 HTTP 端点（签名、head、直传 URL） | ✅ 进程内 S3 协议假服务，CI 每次跑 |
-| **MinIO** | ✅ CI 每次推送都跑（`存储（MinIO 端到端）` job，7/7） |
-| **Cloudflare R2** | ❌ 未跑过 |
-| **AWS S3** | ❌ 未跑过 |
+| **MinIO** | ✅ **VERIFIED** — CI 每次推送都跑（`存储（MinIO 端到端）` job，7/7） |
+| **Cloudflare R2** | ⬜ **NOT RUN** — 没有凭据，执行步骤见 §3 |
+| **AWS S3** | ⬜ **NOT RUN** — 执行步骤见 §4 |
 
-MinIO 已验证不等于 R2/AWS 也没问题：region 语义、path-style、CORS、
-桶策略在三家上并不一样。换端点后请重跑一次 `pnpm test:storage-real`。
+MinIO 已验证不等于 R2/AWS 也没问题：region 语义、path-style、CORS、桶策略、
+以及**服务端会不会真的校验签名里的 content-length**，三家并不一样。
+换端点后请重跑一次 `pnpm test:storage-real`，并把结果填进 §8 的记录表。
 
 `packages/storage/test/s3-adapter.test.ts` 起了一个进程内的 S3 协议 HTTP 服务，
 请求真的经过 AWS SDK 签名、真的走 HTTP、响应头真的被 SDK 解析。它能挡住
@@ -72,15 +73,26 @@ docker compose -f docker-compose.storage.yml down -v
 
 ---
 
-## 3. Cloudflare R2
+## 3. Cloudflare R2 — 状态：NOT RUN
+
+仓库里有模板，填好就能跑：
+
+```bash
+cp .env.r2.example .env.r2      # .env.r2 已在 .gitignore 里
+# 编辑 .env.r2 填入真实值
+set -a && . ./.env.r2 && set +a
+pnpm test:storage-real
+```
+
+必需的六个变量：
 
 ```bash
 STORAGE_ADAPTER=s3
 S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
 S3_REGION=auto
-S3_BUCKET=board-debug-copilot
-S3_ACCESS_KEY_ID=<R2 API Token 的 Access Key ID>
-S3_SECRET_ACCESS_KEY=<Secret Access Key>
+S3_BUCKET=<bucket>
+S3_ACCESS_KEY_ID=<access-key>
+S3_SECRET_ACCESS_KEY=<secret>
 S3_FORCE_PATH_STYLE=true
 ```
 
@@ -91,29 +103,44 @@ S3_FORCE_PATH_STYLE=true
 - API Token 权限选 **Object Read & Write**，作用域限到这一个桶。
 - 桶保持私有。读取一律走签名 URL，不要开公共访问 —— 私有项目的原理图和
   照片不该靠「URL 猜不到」来保密。
-- 直传要在桶上配 CORS，允许前端域名的 `PUT`：
+### CORS
+
+浏览器直传必须配，否则预检就被拦掉，`pnpm test:storage-real`（Node 里跑，
+不走 CORS）却是通的 —— 这个差异很容易让人以为「测试过了就没问题」。
+
+R2 控制台 → 你的桶 → Settings → CORS Policy：
 
 ```json
 [
   {
-    "AllowedOrigins": ["https://board-debug-copilot.vercel.app", "http://localhost:3000"],
-    "AllowedMethods": ["PUT", "GET"],
+    "AllowedOrigins": [
+      "http://localhost:3000",
+      "https://board-debug-copilot.vercel.app"
+    ],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
     "AllowedHeaders": ["content-type", "content-length"],
+    "ExposeHeaders": ["etag"],
     "MaxAgeSeconds": 3600
   }
 ]
 ```
 
-配好后用同一条命令验：
+- `AllowedHeaders` 要含 `content-length`：直传签名把它签进了 `SignedHeaders`
+  （见 §5「直传的大小限制怎么落地」），预检里少了它浏览器就不会发正式请求。
+- `ExposeHeaders: ["etag"]` 让前端能读到 ETag，用于上传后自查。
+- 生产域名换了要同步改这里，否则只有本地能传。
+
+配好后跑：
 
 ```bash
-S3_ENDPOINT=... S3_BUCKET=... S3_ACCESS_KEY_ID=... S3_SECRET_ACCESS_KEY=... \
-  pnpm test:storage-real
+set -a && . ./.env.r2 && set +a && pnpm test:storage-real
 ```
+
+七项全绿再把结果填进 §8。
 
 ---
 
-## 4. AWS S3
+## 4. AWS S3 — 状态：NOT RUN
 
 ```bash
 STORAGE_ADAPTER=s3
@@ -217,7 +244,71 @@ ALLOW_MOCK_STORAGE_IN_PRODUCTION=true
 
 ---
 
-## 6. 从 mock 迁到 s3
+## 6. 直传兼容模式（strict / lenient）
+
+### 现在是什么样
+
+默认 **strict**：presign 把客户端声明的确切字节数签进 `content-length`，
+传多传少都在对象存储侧被拒。前端配合的三条：
+
+1. presign 时把 `file.size` 发给后端 —— 后端签的就是这个数
+2. PUT 的 body 是**原始 `File` 对象**，不 base64、不 ArrayBuffer 中转
+3. **不手动设 `content-length`** —— 它是 fetch 的禁止头，手动设会被忽略，
+   浏览器按 body 自己算。算出来的值和签的值一致，签名才成立
+
+只有 `presign` 返回 `isFallback: true`（mock 存储没有真直传能力）时才回落到
+base64 那条老路。
+
+### 已验证到哪一步
+
+| 路径 | 状态 |
+| --- | --- |
+| Node → MinIO 直传 + 多传一字节被拒 | ✅ VERIFIED（CI 每次跑） |
+| Node → R2 / AWS | ⬜ NOT RUN |
+| **浏览器 → 任何真实对象存储** | ⬜ **NOT RUN** |
+
+浏览器那条从没实测过。`pnpm test:storage-real` 在 Node 里跑，既不经过 CORS，
+也不经过浏览器自己算 content-length 的逻辑。
+
+### 如果浏览器直传到 R2 失败了
+
+先分清是哪一种：
+
+| 现象 | 多半是 | 处理 |
+| --- | --- | --- |
+| 预检 OPTIONS 就被拦 | CORS 没配 `content-length` | 按 §3 的 CORS 配 |
+| 403 `SignatureDoesNotMatch` | 浏览器发的 content-length 与签的不符 | 见下 |
+| 200 但 `complete` 报大小不符 | 文件在 presign 与 PUT 之间变了 | 重新选文件 |
+
+**不要直接把 content-length 的校验删掉。** 那是唯一一道能在字节落地之前
+拦住超限上传的防线，删了它就只剩事后删除。
+
+如果确认是浏览器兼容问题，走 lenient 模式：
+
+```bash
+STORAGE_PRESIGN_CONTENT_LENGTH=lenient
+```
+
+> ⚠️ 这个开关**还没实现**。真碰到浏览器兼容问题时按下面的设计加，
+> 不要临时改 `createPresignedUpload` 了事。
+
+设计约定：
+
+- `strict`（默认）：签 `ContentLength`，行为与现在完全一致。
+  Node/MinIO 这条已验证的路径不受影响。
+- `lenient`：presign 时**不签** `ContentLength`。大小限制退到两道事后防线：
+  1. `completeUpload` 用 `head()` 拿真实大小校验，超限即 `delete()`
+     （已实现，`apps/api/test/kicad-complete.test.ts` 盯着）
+  2. 桶生命周期规则清理没被 `complete` 登记过的孤儿对象（需要在桶上配）
+- 开关只影响 `S3Storage.createPresignedUpload`，`MockStorage` 无所谓。
+- 切到 lenient 必须在 `/health` 的 `storage` 里显形，理由和 mock 存储一样：
+  少一道防线不能是静默的。
+
+在浏览器直传真的验过之前，默认保持 strict。
+
+---
+
+## 7. 从 mock 迁到 s3
 
 1. 建桶、建凭据，按第 3/4 节配好变量。
 2. `pnpm test:storage-real` 跑通。
@@ -228,3 +319,57 @@ ALLOW_MOCK_STORAGE_IN_PRODUCTION=true
 
 配置不全时不会崩，而是降级为 mock 并在 `/health` 的 `storage.degraded`
 与 `storage.reason` 里说清楚 —— 但在生产环境，这个降级会直接变成启动失败。
+
+
+---
+
+## 8. 验证记录
+
+每次对着真实端点跑完 `pnpm test:storage-real`，把结果填在这里。
+**空着就是没验过。**
+
+### MinIO — VERIFIED
+
+| 项 | 值 |
+| --- | --- |
+| 日期 | 2026-08-09（此后每次推送 CI 都跑） |
+| 端点 | `http://127.0.0.1:9000`（CI 内 docker 容器） |
+| 镜像 | `minio/minio:latest` |
+| Node | 22 |
+| SDK | `@aws-sdk/client-s3` ^3 |
+| region / path-style | `auto` / `true` |
+| 结果 | **7/7 通过** |
+| 证据 | CI `存储（MinIO 端到端）` job，[run 31349847345](https://github.com/gongyueetree/board-debug-copilot/actions/runs/31349847345) 起每次绿 |
+
+抓到的问题：presigned PUT 原本签的是 `LIMITS.zip.maxBytes`（上限）而不是确切
+大小，真实上传的 content-length 永远对不上 → `SignatureDoesNotMatch`。
+进程内的假 S3 服务不校验签名，没发现。
+
+### Cloudflare R2 — NOT RUN
+
+| 项 | 值 |
+| --- | --- |
+| 日期 | — |
+| 账号 / 桶 | — |
+| region / path-style | 应为 `auto` / `true` |
+| Node / SDK | — |
+| 结果 | **未执行**：本机没有 R2 凭据 |
+| 下一步 | 按 §3 填 `.env.r2` 后跑 `pnpm test:storage-real`，七项全绿再改这一行 |
+
+要特别留意的两点（MinIO 上验不出来）：
+
+1. **content-length 签名**：R2 是否与 MinIO 一样严格校验。若 R2 放行了
+   长度不符的请求，第 6 项「多传一字节被拒」会失败 —— 那不是代码坏了，
+   是这条防线在 R2 上不成立，需要按 §6 的兼容模式处理。
+2. **浏览器直传的 CORS**：`pnpm test:storage-real` 在 Node 里跑，不经过 CORS。
+   它全绿也不代表浏览器能传。
+
+### AWS S3 — NOT RUN
+
+| 项 | 值 |
+| --- | --- |
+| 日期 | — |
+| 桶 / 区域 | — |
+| region / path-style | 必须是真实区域 / `false` |
+| 结果 | **未执行** |
+| 下一步 | 按 §4 配好后跑 `pnpm test:storage-real` |
