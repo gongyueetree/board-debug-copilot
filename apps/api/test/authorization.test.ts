@@ -17,7 +17,7 @@ function handlerFor(decorator: string): string {
   const start = source.indexOf(decorator)
   if (start === -1) throw new Error(`找不到路由 ${decorator}`)
   const rest = source.slice(start + decorator.length)
-  const next = rest.search(/\n  @(Post|Get|Patch|Delete)\(/)
+  const next = rest.search(/\n {2}@(Post|Get|Patch|Delete)\(/)
   return next === -1 ? rest : rest.slice(0, next)
 }
 

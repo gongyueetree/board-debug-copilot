@@ -151,6 +151,12 @@ SSE 事件是否成流、Bridge 的危险操作是否被拦。
 调试工作台需要本机跑 Bridge（云端不碰 USB）。见 `apps/m2k-bridge/README.md`。
 `BRIDGE_MOCK=true` 时无需 ADALM2000 硬件，用 numpy 合成五个故障场景的波形。
 
+**`BRIDGE_MOCK=false` 是实验性真实硬件路径，目前未完成硬件验证。**
+AWG 的实际输出频率、方波/三角波/锯齿波等波形类型、采集校准与量纲链路都需实机验证
+（`square`/`triangle`/`sawtooth` 目前直接返回 `WAVEFORM_UNSUPPORTED`，不会静默按正弦输出）。
+开启后 `/status` 返回 `hardwareVerified=false`，调试工作台显示「实验性硬件模式」横幅。
+细节见 `apps/m2k-bridge/README.md` 的「真实硬件」一节。
+
 ## 目录结构
 
 ```
@@ -186,7 +192,9 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | --- | --- |
 | `MOCK_MODE=true` | 全链路无外部依赖演示（默认） |
 | `LLM_PROVIDER=gemini\|claude\|deepseek\|mock` | 模型切换，不改代码；缺 key 自动降级为 mock |
-| `BRIDGE_MOCK=true` | 无 ADALM2000 硬件时合成波形 |
+| `BRIDGE_MOCK=true` | 无 ADALM2000 硬件时合成波形；`false` 为**实验性、未实机验证**的真实硬件路径 |
+| `BRIDGE_REQUIRE_PAIRING=true` | 硬件控制端点要求配对 token |
+| `BRIDGE_ALLOW_UNPAIRED_DEBUG` | 仅 CI/内置 Demo：放行 `/debug/scenario`，不放行 `/awg` |
 | `BRIDGE_SCENARIO` | 五个故障场景，数值见 `docs/05` §11.1 |
 
 ## 实施进度

@@ -1,8 +1,17 @@
-"""Real ADALM2000 over libm2k.
+"""Real ADALM2000 over libm2k. EXPERIMENTAL.
 
-Not yet verified against hardware. The structure is complete and the failure
-modes are explicit, but every path marked TODO needs a device on the bench
-before it can be trusted. Do not describe this as hardware-verified.
+Never exercised against actual hardware. The structure is complete and the
+failure modes are explicit, but these in particular are unverified:
+
+  - configure_awg only synthesises sine and dc. square, triangle and sawtooth
+    fall back to sine, and the output frequency is not yet derived from
+    freq_hz - the sample rate and buffer length together determine it.
+  - getSamples channel order, scaling and units are assumed, not confirmed.
+  - calibrateADC/calibrateDAC timing and failure behaviour are unconfirmed.
+  - getSerialNumber / getFirmwareVersion return shapes are assumed.
+
+Every status() reports hardware_verified=False so the UI can say so. Do not
+flip that flag without a device on the bench.
 
 Install notes are in README; libm2k ships as a Python binding over libiio and
 is not pip-installable on every platform.
@@ -70,6 +79,8 @@ class RealM2kAdapter:
                 mock=False,
                 running=False,
                 detail=f"libm2k 未安装：{_IMPORT_ERROR}",
+                hardware_verified=False,
+                experimental=True,
             )
         if self._ctx is None:
             return DeviceStatus(
@@ -80,6 +91,8 @@ class RealM2kAdapter:
                 mock=False,
                 running=False,
                 detail="libm2k 可用，但尚未连接设备",
+                hardware_verified=False,
+                experimental=True,
             )
         # TODO(hardware): 用真实设备核对 getSerialNumber / getFirmwareVersion 的返回
         return DeviceStatus(
@@ -89,6 +102,9 @@ class RealM2kAdapter:
             firmware=getattr(self._ctx, "getFirmwareVersion", lambda: None)(),
             mock=False,
             running=self._running,
+            detail="实验性真实硬件模式，尚未经过实机验证",
+            hardware_verified=False,
+            experimental=True,
         )
 
     def list_devices(self) -> list[dict]:
@@ -131,10 +147,20 @@ class RealM2kAdapter:
 
     def configure_awg(self, config: AwgConfig) -> dict:
         check_hardware_limits(config)
+        # 能力检查和硬件上限一样是静态的，放在设备检查之前：
+        # 「不支持方波」比「没插设备」更接近调用方真正要修的东西
+        if config.wave not in ("sine", "dc"):
+            # 不要静默按正弦输出：调用方会以为自己拿到了方波
+            raise AdapterError(
+                f"真实硬件模式暂未实现 {config.wave} 波形，目前仅支持 sine 与 dc。"
+                "需实机验证后补齐（见 real_m2k.py 头部说明）",
+                "WAVEFORM_UNSUPPORTED",
+            )
         self._require_device()
         idx = 0 if config.channel == "W1" else 1
         try:
-            # TODO(hardware): 波形按 wave 类型生成，目前只实现正弦与直流
+            # TODO(hardware): 输出频率应由 sample_rate 与 buffer 长度共同决定，
+            # 当前写死 75MSPS/1024 点，实际频率并不等于 config.freq_hz
             self._aout.setSampleRate(idx, 75_000_000)
             self._aout.enableChannel(idx, True)
             n = 1024

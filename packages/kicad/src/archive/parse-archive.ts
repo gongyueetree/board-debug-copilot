@@ -49,12 +49,17 @@ export interface ArchiveOutcome {
   log: string
 }
 
-const ARTIFACT_KINDS = {
-  schematicSvgPath: { kind: 'SCHEMATIC', mime: 'image/svg+xml' },
-  pcbSvgPath: { kind: 'PCB', mime: 'image/svg+xml' },
+/** 单文件产物：字段名 → ProjectFile.kind */
+const SINGLE_ARTIFACTS = {
   netlistPath: { kind: 'NETLIST', mime: 'text/plain' },
   ercReportPath: { kind: 'ERC_REPORT', mime: 'application/json' },
   drcReportPath: { kind: 'DRC_REPORT', mime: 'application/json' },
+} as const
+
+/** 多文件产物：多页原理图会产出多个 SVG */
+const MULTI_ARTIFACTS = {
+  schematicSvgPaths: { kind: 'SCHEMATIC', mime: 'image/svg+xml' },
+  pcbSvgPaths: { kind: 'PCB', mime: 'image/svg+xml' },
 } as const
 
 export async function parseKicadArchive(deps: ArchiveDeps): Promise<ArchiveOutcome> {
@@ -119,20 +124,19 @@ export async function parseKicadArchive(deps: ArchiveDeps): Promise<ArchiveOutco
     // 产物入对象存储
     let artifacts = 0
     if (storage) {
-      for (const [field, meta] of Object.entries(ARTIFACT_KINDS)) {
-        const rel = outcome.artifacts[field as keyof typeof outcome.artifacts]
-        if (!rel) continue
+      const saveArtifact = async (rel: string, kind: string, mime: string) => {
         try {
-          const buf = await readFile(join(dir, rel))
+          const buf = await readFile(join(dir!, rel))
           const key = `projects/${projectId}/kicad/v${designVersion}/${basename(rel)}`
-          await storage.put(key, buf, meta.mime)
+          await storage.put(key, buf, mime)
           await prisma.projectFile.create({
             data: {
               projectId,
-              kind: meta.kind,
+              kind,
+              // 用实际文件名，不是 --output 传进去的那个参数
               filename: basename(rel),
               objectKey: key,
-              mimeType: meta.mime,
+              mimeType: mime,
               sizeBytes: buf.byteLength,
               parseStatus: 'OK',
               parseLog: `designVersion=${designVersion}`,
@@ -140,7 +144,17 @@ export async function parseKicadArchive(deps: ArchiveDeps): Promise<ArchiveOutco
           })
           artifacts++
         } catch (err) {
-          log.push(`[WARN] 产物 ${field} 保存失败: ${(err as Error).message.slice(0, 120)}`)
+          log.push(`[WARN] 产物 ${rel} 保存失败: ${(err as Error).message.slice(0, 120)}`)
+        }
+      }
+
+      for (const [field, meta] of Object.entries(SINGLE_ARTIFACTS)) {
+        const rel = outcome.artifacts[field as keyof typeof SINGLE_ARTIFACTS]
+        if (rel) await saveArtifact(rel, meta.kind, meta.mime)
+      }
+      for (const [field, meta] of Object.entries(MULTI_ARTIFACTS)) {
+        for (const rel of outcome.artifacts[field as keyof typeof MULTI_ARTIFACTS] ?? []) {
+          await saveArtifact(rel, meta.kind, meta.mime)
         }
       }
       log.push(`[OK ] artifacts: ${artifacts} 个产物已入库`)

@@ -15,7 +15,7 @@
 | LLM | 预置结果，确定性 | Gemini / Claude / DeepSeek | `LLM_PROVIDER` + 对应 key | ✅ Gemini 已跑通评测 11/11 |
 | 对象存储 | 本地盘，无盘退内存 | S3 / R2 / MinIO | `STORAGE_ADAPTER=s3` | ⚠️ 接口完整，未接真实 bucket 验证 |
 | KiCad 解析 | 只解析包内 netlist | kicad-cli 全流程 | 装 KiCad 9 并让 `kicad-cli` 在 PATH | ⚠️ CLI 分支未在装有 KiCad 的机器上验证 |
-| ADALM2000 | numpy 合成波形 | libm2k | `BRIDGE_MOCK=false` | ❌ **未接真实硬件验证** |
+| ADALM2000 | numpy 合成波形 | libm2k | `BRIDGE_MOCK=false` | ❌ **实验性，未接真实硬件验证**（见 §5） |
 | 元器件库 | 内置常识参数 | 真实器件库 | 换 `PartsDatabaseAdapter` | ❌ 未接入 |
 | 队列 | 无 Redis 时同步兜底 | BullMQ | 配 `REDIS_URL` | ✅ 两条路径都验证过 |
 
@@ -177,10 +177,30 @@ token 走 query）。
 `MOCK_MODE` 不绕过配对。`BRIDGE_REQUIRE_PAIRING=false` 仅供 CI 与内置 Demo，
 `/status` 会报出它被关掉了。
 
-### 真实硬件
+`/debug/scenario` 同样要 token：它是 mock 专有，但换场景会改变波形、测量值
+以及 AI 诊断结论 —— 任何能改变操作者所见的接口都是控制面。CI 与内置 Demo 用
+`BRIDGE_ALLOW_UNPAIRED_DEBUG=true` 显式豁免，该开关**只**放行场景切换，
+不放行 `/awg`；`/status` 会报出 `allowUnpairedDebug`。
 
-**尚未在真实 ADALM2000 上验证。** 接口完整、失败路径明确，但每个标了
-TODO(hardware) 的地方都需要设备在手才能确认。
+### 真实硬件（实验性）
+
+**`BRIDGE_MOCK=false` 尚未在真实 ADALM2000 上验证。** 接口完整、失败路径明确，
+但每个标了 TODO(hardware) 的地方都需要设备在手才能确认。
+
+这条路径不静默：`/status` 返回 `hardwareVerified=false` 与 `experimental=true`，
+调试工作台据此显示「实验性硬件模式」横幅与页脚角标。
+
+需实机验证的点：
+
+| 项 | 现状 |
+| --- | --- |
+| AWG 输出频率 | 写死 75MSPS / 1024 点缓冲，实际频率并不等于请求的 `freqHz` |
+| 波形类型 | 只合成 `sine` 与 `dc`；其余返回 `WAVEFORM_UNSUPPORTED`，不静默按正弦输出 |
+| 采集校准 | `calibrateADC` / `calibrateDAC` 的时序与失败行为未确认 |
+| 采样量纲 | `getSamples` 的通道顺序、标度、单位是假设的 |
+| 设备元信息 | `getSerialNumber` / `getFirmwareVersion` 返回形状是假设的 |
+
+把 W1/W2 接到被测板卡之前，先用独立示波器核对 Bridge 实际输出。
 
 需要 `libm2k` + `libiio`：
 

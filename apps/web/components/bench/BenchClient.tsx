@@ -11,7 +11,12 @@ import {
 } from '@app/ui'
 import { useMemo, useState } from 'react'
 import type { Measurements, Scenario } from '@app/contracts'
-import { needsConfirm, useBridge, type AwgRequest } from '@/lib/bridge'
+import {
+  isExperimentalHardware,
+  needsConfirm,
+  useBridge,
+  type AwgRequest,
+} from '@/lib/bridge'
 import { useAnalyzeCapture, useSaveCapture } from '@/lib/mutations'
 import { PairingCard } from './PairingCard'
 import { WiringGuide } from './WiringGuide'
@@ -107,6 +112,14 @@ BRIDGE_MOCK=true uvicorn src.main:app --host 127.0.0.1 --port 3777`}
 
   return (
     <div className="flex h-[calc(100vh-9rem)] flex-col gap-3">
+      {isExperimentalHardware(bridge.status) && (
+        <div className="shrink-0 rounded-card border border-orange-300 bg-orange-50 px-4 py-2.5 text-xs text-orange-900">
+          <strong className="font-semibold">实验性硬件模式</strong>
+          ：当前 Bridge 使用真实 ADALM2000 适配器（adapter={bridge.status?.adapter}
+          ），但该路径尚未经过实机验证。AWG 实际输出频率、方波/三角波等波形类型、
+          采集校准链路都可能与界面显示不符。请先用示波器独立核对输出，再接到被测板卡上。
+        </div>
+      )}
       <div className="flex min-h-0 flex-1 gap-3">
         {/* 左：接线与测试设置 */}
         <aside className="flex w-[340px] shrink-0 flex-col gap-3 overflow-auto">
@@ -410,6 +423,11 @@ BRIDGE_MOCK=true uvicorn src.main:app --host 127.0.0.1 --port 3777`}
         </span>
         {bridge.status.mock && (
           <span className="rounded bg-amber-50 px-1.5 py-0.5 text-amber-600">MOCK 模式</span>
+        )}
+        {isExperimentalHardware(bridge.status) && (
+          <span className="rounded bg-orange-100 px-1.5 py-0.5 font-medium text-orange-700">
+            实验性硬件模式（未实机验证）
+          </span>
         )}
         <span className="ml-auto">场景：{bridge.status.scenario}</span>
       </footer>

@@ -32,4 +32,33 @@ if [ -n "$artifacts" ]; then
   exit 1
 fi
 
-echo "✓ 无源码文件被误忽略，无构建产物混入 src"
+# 源码里不该有真实控制字节。
+#
+# 起因：packages/storage 的文件名 sanitize 正则里嵌了真实的 NUL 与 US 字节，
+# 而不是转义序列。语义碰巧一样，但 git 与 grep 把整个文件当二进制 ——
+# diff 显示 "Binary file differs"，代码审查等于失明。
+binary=$(git ls-files -z '*.ts' '*.tsx' '*.js' '*.mjs' '*.py' '*.json' '*.md' '*.yml' '*.yaml' '*.sh' '*.prisma' '*.css' \
+  | python3 -c '
+import sys
+BAD = set(range(0, 9)) | set(range(14, 32)) | {127}
+for path in sys.stdin.buffer.read().split(b"\0"):
+    if not path:
+        continue
+    name = path.decode()
+    try:
+        data = open(name, "rb").read()
+    except OSError:
+        continue
+    hit = sorted({c for c in data if c in BAD})
+    if hit:
+        print(f"{name}  控制字节 {hit}")
+')
+if [ -n "$binary" ]; then
+  echo "以下源码文件含真实控制字节，git 会当二进制处理："
+  echo "$binary" | sed 's/^/  /'
+  echo
+  echo "正则/字符串里请写转义序列（\\x00）或 String.fromCharCode，不要嵌真实字节。"
+  exit 1
+fi
+
+echo "✓ 无源码文件被误忽略，无构建产物混入 src，无控制字节"

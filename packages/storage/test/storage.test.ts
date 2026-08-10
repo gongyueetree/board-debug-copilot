@@ -23,6 +23,14 @@ describe('文件名 sanitize', () => {
     expect(sanitizeFilename('x'.repeat(300)).length).toBeLessThanOrEqual(100)
   })
 
+  it('剥掉控制字符与 DEL', () => {
+    // 这条规则的正则里曾经嵌着真实的 NUL 字节，git 把整个源文件当二进制，
+    // diff 看不见改动。这里用 fromCharCode 构造，避免再往源码里塞控制字节。
+    const ctl = (...codes: number[]) => String.fromCharCode(...codes)
+    expect(sanitizeFilename(`a${ctl(0)}b${ctl(31)}c${ctl(127)}.zip`)).toBe('abc.zip')
+    expect(sanitizeFilename(ctl(0, 31, 127))).toBe('file')
+  })
+
   it('全是非法字符时给出兜底名', () => {
     expect(sanitizeFilename('///')).toBe('file')
   })

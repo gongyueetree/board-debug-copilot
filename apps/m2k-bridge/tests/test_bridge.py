@@ -224,3 +224,39 @@ def test_ws_streams_after_pairing():
             if {"waveform", "measurements"} <= kinds:
                 break
         assert {"waveform", "measurements"} <= kinds
+
+
+# -- real adapter (experimental) ---------------------------------------
+
+
+def test_real_adapter_reports_unverified():
+    """真实硬件路径必须自己承认未验证 —— UI 的警示横幅全靠这两个字段。
+
+    这里不需要 libm2k：没装时走 LIBM2K_MISSING 分支，同样必须带标记。
+    """
+    from src.adapters.real_m2k import RealM2kAdapter
+
+    s = RealM2kAdapter().status()
+    assert s.hardware_verified is False
+    assert s.experimental is True
+    assert s.mock is False
+
+
+def test_mock_adapter_is_not_experimental():
+    from src.adapters.mock_m2k import MockM2kAdapter
+
+    s = MockM2kAdapter().status()
+    assert s.hardware_verified is True
+    assert s.experimental is False
+
+
+def test_real_adapter_rejects_unimplemented_waveform():
+    """方波未实现就必须报错，不能静默按正弦推出去 —— 调用方会以为自己拿到了方波。"""
+    from src.adapters import AdapterError, AwgConfig
+    from src.adapters.real_m2k import RealM2kAdapter
+
+    with pytest.raises(AdapterError) as exc:
+        RealM2kAdapter().configure_awg(
+            AwgConfig(channel="W1", wave="square", freq_hz=1000.0, amplitude_vpp=0.4, offset_v=0.0)
+        )
+    assert exc.value.code == "WAVEFORM_UNSUPPORTED"

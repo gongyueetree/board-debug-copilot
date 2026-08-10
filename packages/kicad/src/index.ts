@@ -10,6 +10,7 @@ export { SCHEMATIC_RULES, runSchematicRules, parseValue } from './rules/schemati
 export { finding, type DesignGraph, type SchematicRule } from './rules/types'
 export { buildDesignDigest, detectOpampTopology, type DigestInput } from './graph/digest'
 export {
+  collectSvgArtifacts,
   parseProject,
   probeKicadCli,
   type KicadCliOptions,

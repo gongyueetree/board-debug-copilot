@@ -122,7 +122,23 @@ token 存 `~/.board-debug-copilot/bridge.json`（0600），重启不丢。
 `BRIDGE_REQUIRE_PAIRING=false` 仅供 CI 与内置 Demo，`/status` 会报出它被关掉。
 **MOCK_MODE 不绕过配对** —— 跳过安全步骤的演示不算演示这个产品。
 
-## 真实硬件
+## 真实硬件（实验性，未实机验证）
+
+> **`BRIDGE_MOCK=false` 是实验性路径。** 代码结构完整、错误分支明确，但**至今没有在真实
+> ADALM2000 上跑过**。开启后 `/status` 会返回 `hardwareVerified=false`、`experimental=true`，
+> 前端调试工作台会显示「实验性硬件模式」横幅。
+>
+> 已知需要实机验证的部分：
+>
+> - **AWG 实际输出频率**：当前写死 75MSPS 采样率 / 1024 点缓冲，输出频率由这两者共同决定，
+>   并不等于请求里的 `freqHz`。
+> - **波形类型**：只合成了 `sine` 与 `dc`。`square` / `triangle` / `sawtooth` 会直接返回
+>   `WAVEFORM_UNSUPPORTED`，而不是静默按正弦输出。
+> - **采集校准与量纲**：`calibrateADC` / `calibrateDAC` 的时序与失败行为、`getSamples` 的
+>   通道顺序与电压标度都是按文档假设写的，未经确认。
+> - **设备元信息**：`getSerialNumber` / `getFirmwareVersion` 的返回形状同样是假设。
+>
+> 在把 W1/W2 接到被测板卡之前，请先用独立示波器核对 Bridge 的实际输出。
 
 需要 `libm2k` + `libiio`（不是纯 pip 包）：
 

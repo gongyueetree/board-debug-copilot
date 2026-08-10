@@ -1,5 +1,15 @@
-import { describe, expect, it } from 'vitest'
-import { checkEntryPath, inferCategory, inferNetRole, inferPinType, parseNetlist } from '../src'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterAll, describe, expect, it } from 'vitest'
+import {
+  checkEntryPath,
+  collectSvgArtifacts,
+  inferCategory,
+  inferNetRole,
+  inferPinType,
+  parseNetlist,
+} from '../src'
 import { DEFAULT_LIMITS } from '../src/archive/safe-unzip'
 import { normalizeCode, normalizeSeverity, parseErcDrc } from '../src/parser/erc-drc'
 
@@ -164,5 +174,49 @@ describe('zip 条目路径安全', () => {
     const r = check('project/demo.kicad_sch')
     expect(r.safe).toBe(true)
     if (r.safe) expect(r.target).toContain('demo.kicad_sch')
+  })
+})
+
+describe('collectSvgArtifacts', () => {
+  // kicad-cli 的 --output 有时是文件、有时是目录，多页原理图会产出多个 SVG。
+  // 早先直接把 --output 参数当文件路径去读，遇到目录会整个解析失败。
+  const roots: string[] = []
+  const tmp = async () => {
+    const d = await mkdtemp(join(tmpdir(), 'kicad-svg-'))
+    roots.push(d)
+    return d
+  }
+
+  afterAll(async () => {
+    await Promise.all(roots.map((d) => rm(d, { recursive: true, force: true })))
+  })
+
+  it('目录下的多页 SVG 全部收集，顺序稳定', async () => {
+    const dir = await tmp()
+    await mkdir(join(dir, 'sch-svg'))
+    for (const n of ['page2.svg', 'page1.svg', 'notes.txt']) {
+      await writeFile(join(dir, 'sch-svg', n), 'x')
+    }
+    expect(await collectSvgArtifacts(dir, 'sch-svg')).toEqual([
+      'sch-svg/page1.svg',
+      'sch-svg/page2.svg',
+    ])
+  })
+
+  it('单文件输出直接返回自身', async () => {
+    const dir = await tmp()
+    await writeFile(join(dir, 'board.svg'), 'x')
+    expect(await collectSvgArtifacts(dir, 'board.svg')).toEqual(['board.svg'])
+  })
+
+  it('输出不存在时返回空数组而不是抛错', async () => {
+    const dir = await tmp()
+    expect(await collectSvgArtifacts(dir, 'pcb-svg')).toEqual([])
+  })
+
+  it('非 SVG 的单文件不被当成产物', async () => {
+    const dir = await tmp()
+    await writeFile(join(dir, 'netlist.net'), 'x')
+    expect(await collectSvgArtifacts(dir, 'netlist.net')).toEqual([])
   })
 })

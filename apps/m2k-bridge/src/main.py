@@ -174,6 +174,8 @@ def status() -> dict:
         "scenario": s.scenario,
         "detail": s.detail,
         "adapter": adapter.name,
+        "hardwareVerified": s.hardware_verified,
+        "experimental": s.experimental,
         "pairingRequired": PAIRING_REQUIRED,
         "allowUnpairedDebug": ALLOW_UNPAIRED_DEBUG,
         **pairing.status(),

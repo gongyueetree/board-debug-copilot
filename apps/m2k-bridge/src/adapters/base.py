@@ -41,6 +41,11 @@ class DeviceStatus:
     scenario: str | None = None
     #: Populated when the adapter cannot operate, e.g. libm2k missing
     detail: str | None = None
+    #: False for the real adapter until it has been exercised against actual
+    #: hardware. The UI shows an experimental badge; do not flip this without
+    #: a device on the bench.
+    hardware_verified: bool = True
+    experimental: bool = False
 
 
 @dataclass

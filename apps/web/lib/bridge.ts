@@ -16,10 +16,24 @@ export interface BridgeStatus {
   running: boolean
   adapter: string
   detail: string | null
+  /** 真实适配器至今未经实机验证，Bridge 会把这个标志一路带到 UI */
+  hardwareVerified: boolean
+  experimental: boolean
   pairingRequired: boolean
   paired: boolean
   pairingPending: boolean
   codeExpiresInSeconds: number
+}
+
+/**
+ * 真实硬件路径是否处于未验证状态。
+ *
+ * 判定放宽一格：老版本 Bridge 不带 hardwareVerified 字段，此时也按未验证算。
+ * 少显示一次警告的代价是有人拿未验证的代码去驱动真板子，宁可多显示。
+ */
+export function isExperimentalHardware(s: BridgeStatus | null): boolean {
+  if (!s || s.mock) return false
+  return s.experimental === true || s.hardwareVerified !== true
 }
 
 const TOKEN_KEY = 'bdc.bridge.token'

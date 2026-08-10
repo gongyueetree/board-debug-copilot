@@ -6,6 +6,7 @@ import {
   describeStorage,
   validateUpload,
   type FileKindKey,
+  type ObjectHead,
   type PresignedUpload,
   type PutResult,
   type StorageAdapter,
@@ -60,6 +61,11 @@ export class StorageService {
 
   get(key: string): Promise<Buffer | null> {
     return this.adapter.get(key)
+  }
+
+  /** 只取元信息，不把对象内容拉进进程 */
+  head(key: string): Promise<ObjectHead | null> {
+    return this.adapter.head(key)
   }
 
   delete(key: string): Promise<void> {

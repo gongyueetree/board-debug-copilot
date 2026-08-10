@@ -29,8 +29,9 @@ venv/
 npm-debug.log*
 pnpm-debug.log*
 
-# 只忽略根目录下的 mock 对象存储；不要写成 storage/，
+# 只忽略 mock 对象存储的落盘目录；不要写成 storage/，
 # 那会连 apps/api/src/storage/ 这样的源码目录一起忽略掉
 /storage/
+/apps/*/storage/
 /tmp/
 coverage/

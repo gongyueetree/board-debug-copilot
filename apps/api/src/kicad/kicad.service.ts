@@ -65,12 +65,20 @@ export class KicadService {
   ): Promise<UploadHandoff> {
     await this.assertProject(projectId)
 
-    // 不信任前端报的大小，回读确认对象确实存在
-    const buf = await this.storage.get(input.objectKey)
-    if (!buf) {
+    // 只取元信息：不信任前端报的大小，但也不该把 100MB 的 zip
+    // 整个拉进 API 进程 —— 内容由 worker 解析时才读。
+    const head = await this.storage.head(input.objectKey)
+    if (!head) {
       throw new NotFoundException(`对象不存在: ${input.objectKey}，直传可能未成功`)
     }
-    this.storage.validate('zip', 'application/zip', buf.byteLength)
+
+    try {
+      this.storage.validate('zip', head.mimeType ?? 'application/zip', head.sizeBytes)
+    } catch (err) {
+      // 超限对象留在存储里只会占空间，且不会有任何流程再用到它
+      await this.storage.delete(input.objectKey).catch(() => {})
+      throw err
+    }
 
     const file = await this.prisma.projectFile.create({
       data: {
@@ -79,7 +87,7 @@ export class KicadService {
         filename: input.filename,
         objectKey: input.objectKey,
         mimeType: 'application/zip',
-        sizeBytes: buf.byteLength,
+        sizeBytes: head.sizeBytes,
         parseStatus: 'PENDING',
       },
     })
