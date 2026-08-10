@@ -49,12 +49,34 @@ BRIDGE_PAIRING_SECRET=
 BRIDGE_MOCK=true
 ```
 
+## 对象存储（生产必配）
+
+Railway 容器无持久卷，`STORAGE_ADAPTER=mock` 重启即丢。生产用 R2 或 S3：
+
+```env
+STORAGE_ADAPTER=s3
+S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com   # R2；AWS 留空
+S3_REGION=auto                                              # AWS 填真实 region
+S3_BUCKET=board-debug-copilot
+S3_ACCESS_KEY_ID=
+S3_SECRET_ACCESS_KEY=
+S3_FORCE_PATH_STYLE=true                                    # R2/MinIO true，AWS false
+```
+
+配置不全会自动降级为 mock 并在 `/health` 的 `storage.degraded` 标出来 ——
+不会因为少一个变量就起不来，但也不会静默。
+
+完整运维说明见 `docs/07-operations.md`。
+
 ## 注意事项（历史经验）
 - GitHub 账号是 `gongyueetree`，push 前确认 remote
 - zsh 命令不要带中文行内注释
 - Vercel 上 Next.js 需把 `packages/*` 加入 transpilePackages
 - CORS：api 允许 Vercel 域名；Bridge 只允许配置的 origins 且只绑 127.0.0.1
 - 混合内容：https 前端连 `ws://127.0.0.1` 在 Chrome 允许（localhost 豁免），文档中向用户说明需用 Chrome/Edge
+- `AUTH_SECRET` 生产必配，否则每次重启登录态全失效
+- `REDIS_URL` 生产必配，否则大工程解析在请求里同步跑会被网关超时掐断
+- `BRIDGE_REQUIRE_PAIRING` 不要在生产关掉
 
 ## 本地开发
 ```

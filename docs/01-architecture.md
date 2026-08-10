@@ -26,6 +26,24 @@ Railway
 2. **测量流**：浏览器 ⇄ localhost Bridge WS → 前端实时波形 + FFT → 用户保存 Capture → 测量摘要（JSON，非原始数组）POST 到 api → AI 分析
 3. **视觉流**：照片上传 → 对象存储 → AI 多模态分析（mock 先行）→ 用户 Konva 标注 → 标注关联 Component/Net/DebugStep
 
+## 异步任务（apps/worker）
+```
+单队列 bdc-jobs，按 job name 分派
+├── kicad.parse       worker 直接做：解压 + kicad-cli 是文件系统重活
+├── report.generate   回调 api：纯 DB 聚合，保持单一实现
+├── ai.long-task      回调 api
+└── parts.match-bom   回调 api
+```
+- payload schema 在 packages/contracts，入队与出队两侧都校验（队列是进程边界）
+- 无 REDIS_URL：worker 空转，api 同步兜底并在响应标 degraded
+- 失败一律写回 ProjectFile.parseStatus / parseLog，不静默
+
+## 对象存储（packages/storage）
+- api 与 worker 共用同一 adapter，避免 S3 配置与 key 规范分成两份漂移
+- mock（本地盘，无盘退内存）/ s3（R2、AWS S3、MinIO）
+- 大文件走 presign 直传，不经过 Node 进程
+- 用户文件名 sanitize 后加 uuid 前缀，不直接拼进 objectKey
+
 ## AI Agent 架构（packages/ai）
 ```
 AgentRouter（意图分类）
@@ -55,6 +73,15 @@ POST /ai/design-review         POST /ai/debug-plan
 POST /ai/analyze-capture       POST /ai/analyze-photo
 POST /projects/:id/debug-steps CRUD
 POST /projects/:id/reports     GET /reports/:id (markdown)
+```
+
+## Bridge 安全分层
+```
+Origin 校验      挡住浏览器跨站
+配对 token       挡住本机非浏览器调用（Origin 头可以不带）
+二次确认 428     幅度 > 5Vpp 或偏置 ≠ 0
+硬件上限 422     超 ADALM2000 能力，confirm 也救不了
+急停             不需要 token —— 因 token 过期而失效的急停比没有更糟
 ```
 
 ## Bridge 协议（instrument-protocol 包共享类型）

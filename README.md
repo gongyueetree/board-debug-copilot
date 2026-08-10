@@ -77,10 +77,47 @@ Claude 用 `ANTHROPIC_API_KEY`，DeepSeek 用 `DEEPSEEK_API_KEY`，或统一用 
 
 SDK import 只允许出现在 `packages/ai/src/providers/`，应用代码永远只见 `LlmProvider` 接口。
 
+## 当前能力边界
+
+| 能力 | 默认 | 真实路径 | 验证状态 |
+| --- | --- | --- | --- |
+| LLM | mock | Gemini / Claude / DeepSeek | ✅ Gemini 评测 11/11 |
+| 对象存储 | 本地盘 | S3 / R2 / MinIO | ⚠️ 未接真实 bucket |
+| KiCad 解析 | 包内 netlist | kicad-cli 全流程 | ⚠️ CLI 分支未在装 KiCad 的机器验证 |
+| ADALM2000 | numpy 合成 | libm2k | ❌ **未接真实硬件** |
+| 队列 | 无 Redis 同步兜底 | BullMQ | ✅ 两条路径都验证 |
+
+降级从不静默：`GET /health` 报 `llm.degraded` 与 `storage.degraded`。
+完整说明见 `docs/07-operations.md`。
+
+## 公共 Demo 是只读的
+
+未登录可完整浏览 6 个页面，但不能写。想动手就点「复制到我的项目」克隆一份
+（邮箱即账号，无需密码）。早先允许匿名写，任何访客都能污染所有人看到的数据。
+
+## 异步任务
+
+```bash
+pnpm --filter @app/worker dev    # 启动 worker
+pnpm job kicad.parse '{...}'     # 手动入队；无 Redis 时直接本地跑
+```
+
+无 `REDIS_URL` 时 worker 空转、api 同步兜底，本地开发不必起 Redis。
+
+## Bridge 配对
+
+Bridge 只监听 127.0.0.1。控制类接口需要配对：网页点「连接本地 Bridge」，
+Bridge 控制台会打印 6 位配对码。`/status` 与 `/emergency-stop` 不需要 token。
+
+真实 ADALM2000 需要 libm2k + libiio，**尚未在硬件上验证**，见
+`apps/m2k-bridge/README.md`。
+
 ## 智能体评测
 
 ```bash
-pnpm test:agent
+pnpm test          # 单元测试（vitest），不需要数据库
+pnpm test:agent    # 智能体黄金用例，需要 api 在跑
+cd apps/m2k-bridge && pytest   # Bridge 安全与场景测试
 ```
 
 docs/05 §14 的 12 条黄金用例。断言**结构与命中**而非措辞——诊断带受控的
@@ -139,6 +176,8 @@ packages/instrument-protocol  Bridge 的 WS/REST 消息契约
 | `docs/03-ui-spec.md` | 6 个页面 UI 规格 |
 | `docs/04-deploy.md` | Vercel / Railway 部署与环境变量 |
 | `docs/05-agent-design.md` | 智能体设计（packages/ai 实施规格） |
+| `docs/06-railway-setup.md` | Railway 服务与变量 |
+| `docs/07-operations.md` | **运维手册：mock/real 边界、队列、存储、Bridge 配对** |
 | `prompts/P0..P8` | 分阶段执行 Prompt |
 
 ## 关键开关

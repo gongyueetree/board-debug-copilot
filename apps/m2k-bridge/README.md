@@ -1,5 +1,9 @@
 # M2K Bridge
 
+> **真实 ADALM2000 尚未验证。** 适配器接口完整、失败路径明确，
+> 但标了 `TODO(hardware)` 的地方都需要设备在手才能确认。
+> `BRIDGE_MOCK=true`（默认）用 numpy 合成波形，无需硬件。
+
 本地 ADALM2000 网关。**只监听 127.0.0.1:3777**，云端不直接控制 USB（CLAUDE.md 硬性原则 #5）。
 
 不进 turbo pipeline，单独启动。
@@ -80,3 +84,76 @@ pyinstaller bridge.spec
 
 需另装 `libm2k` / `libiio`，把 `scenarios.synthesize` 换成真实采集。
 接口契约（`packages/instrument-protocol`）不变。
+
+
+## 架构
+
+```
+main.py          仅路由与鉴权
+adapters/
+  base.py        接口定义 + 硬件上限 + 确认判据
+  mock_m2k.py    numpy 合成，五个场景
+  real_m2k.py    libm2k，失败路径明确
+protocol.py      WS 帧编码（与 packages/instrument-protocol 对应）
+pairing.py       本地配对与 token 持久化
+```
+
+## 配对
+
+Origin 校验挡不住本机的非浏览器调用。配对码走「用户能看到 Bridge 控制台」
+这个带外信道 —— 对能驱动真实硬件的服务，这才是有意义的凭据。
+
+```
+GET  /pairing/status
+POST /pairing/start     控制台打印 6 位码，5 分钟有效
+POST /pairing/verify    {code} → {token}
+POST /pairing/revoke    {token?} 不传则全部撤销
+```
+
+token 存 `~/.board-debug-copilot/bridge.json`（0600），重启不丢。
+
+| 接口 | 需要 token | 原因 |
+| --- | --- | --- |
+| `/status` | ❌ | UI 得先知道自己未配对 |
+| `/emergency-stop` | ❌ | 因 token 过期而失效的急停比没有更糟 |
+| `/pairing/*` | ❌ | 配对本身 |
+| `/devices` `/awg` `/scope` `WS /ws` | ✅ | 能驱动硬件 |
+
+`BRIDGE_REQUIRE_PAIRING=false` 仅供 CI 与内置 Demo，`/status` 会报出它被关掉。
+**MOCK_MODE 不绕过配对** —— 跳过安全步骤的演示不算演示这个产品。
+
+## 真实硬件
+
+需要 `libm2k` + `libiio`（不是纯 pip 包）：
+
+| 平台 | 安装 |
+| --- | --- |
+| macOS | `brew install libiio`，libm2k 需源码编译并装 Python 绑定 |
+| Linux | Analog Devices 提供 .deb，或源码编译 |
+| Windows | 官方安装包自带 Python 绑定 |
+
+```bash
+BRIDGE_MOCK=false pnpm bridge:dev
+```
+
+失败行为：
+
+- 没装 libm2k → `/status` 返回 `LIBM2K_MISSING` 并指向本文，不崩
+- 装了但没插设备 → `NO_DEVICE`，并提示 Scopy 会独占设备
+- 场景切换 → 409，真实模式没有「场景」概念
+
+## 测试
+
+```bash
+python -m pytest -q
+```
+
+16 条用例覆盖确认、硬件上限、配对、过期、撤销、场景数值与确定性。
+
+## 打包
+
+```bash
+pyinstaller bridge.spec     # → dist/bdc-bridge，约 17MB 单文件
+```
+
+已在 macOS arm64 上验证产物可运行。Windows / Linux 需在对应平台各打一次。
