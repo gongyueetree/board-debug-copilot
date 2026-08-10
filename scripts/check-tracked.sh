@@ -21,4 +21,15 @@ if [ -n "$missed" ]; then
   exit 1
 fi
 
-echo "✓ 无源码文件被误忽略"
+# 反向检查：构建产物不该出现在 src/ 里，更不该被跟踪
+artifacts=$(git ls-files 'packages/*/src/*.js' 'packages/*/src/*.d.ts' 'packages/*/src/*.map' \
+  'apps/*/src/*.js' 'apps/*/src/*.d.ts' 2>/dev/null || true)
+if [ -n "$artifacts" ]; then
+  echo "以下构建产物被提交进了源码目录："
+  echo "$artifacts" | sed 's/^/  /'
+  echo
+  echo "src/ 只放源码，产物应在 dist/。用 git rm --cached 移除。"
+  exit 1
+fi
+
+echo "✓ 无源码文件被误忽略，无构建产物混入 src"

@@ -2,6 +2,11 @@ node_modules/
 .pnpm-store/
 dist/
 build/
+
+# 构建产物绝不能落在 src/ —— P0 时期 tsc 曾往 src 里写过 .js/.d.ts 并被提交
+packages/*/src/**/*.js
+packages/*/src/**/*.d.ts
+packages/*/src/**/*.map
 .next/
 out/
 .turbo/

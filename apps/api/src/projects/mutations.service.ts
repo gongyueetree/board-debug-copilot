@@ -26,7 +26,8 @@ export class MutationsService {
     const data = Buffer.from(input.base64, 'base64')
     this.storage.validate('photo', input.mimeType, data.byteLength)
 
-    const key = `projects/${projectId}/photos/${randomUUID()}-${input.filename}`
+    // 用户文件名不直接拼进 key：sanitize + uuid 前缀在 @app/storage 里统一处理
+    const key = this.storage.key(projectId, 'photos', input.filename)
     const { objectKey, checksum } = await this.storage.put(key, data, input.mimeType)
 
     const [photo] = await this.prisma.$transaction([
@@ -110,7 +111,7 @@ export class MutationsService {
 
     let waveformObjectKey: string | null = null
     if (input.waveform) {
-      const key = `projects/${projectId}/waveforms/${randomUUID()}.json`
+      const key = this.storage.key(projectId, 'waveforms', 'waveform.json')
       const { objectKey } = await this.storage.put(
         key,
         Buffer.from(JSON.stringify(input.waveform)),

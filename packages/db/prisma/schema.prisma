@@ -73,6 +73,9 @@ model Project {
   description  String?
   status       ProjectStatus @default(CREATED)
   currentIssue String?
+  /// 设计版本号，每次成功解析 KiCad 工程 +1。
+  /// 捕获保存时记录当时的版本，不一致则 UI 提示来自旧设计。
+  designVersion Int          @default(1)
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
@@ -365,4 +368,26 @@ model DebugReport {
   project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   @@index([projectId])
+}
+
+/// 器件知识库（docs/05 §16.3：接真实百万器件库时的接入点）。
+///
+/// embedding 是 pgvector 类型，Prisma 没有原生支持，用 Unsupported 声明。
+/// 必须写进 schema —— 否则 `migrate diff` 每次都会生成 DROP TABLE，
+/// 因为它看不到这张由原始 SQL 迁移建出来的表。
+model PartKnowledge {
+  id           String   @id @default(uuid())
+  partNumber   String   @unique
+  manufacturer String?
+  category     String
+  summary      String
+  paramsJson   Json     @default("{}")
+  source       String   @default("BUILTIN")
+  embedding    Unsupported("vector(768)")?
+  createdAt    DateTime @default(now())
+
+  @@index([category])
+  // 注意：embedding 上的 HNSW 索引由原始 SQL 迁移创建，Prisma 表达不了向量索引。
+  // 因此 `migrate diff` 会一直提示 DROP INDEX PartKnowledge_embedding_idx —— 忽略它，
+  // 不要把该语句写进迁移文件。
 }

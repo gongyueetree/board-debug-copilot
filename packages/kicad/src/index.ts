@@ -24,4 +24,26 @@ export {
   parseSExpr,
 } from './parser/netlist'
 
-export const KICAD_PACKAGE_VERSION = '0.2.0'
+export {
+  parseKicadArchive,
+  type ArchiveDeps,
+  type ArchiveOutcome,
+  type StorageLike,
+} from './archive/parse-archive'
+export {
+  DEFAULT_LIMITS,
+  checkEntryPath,
+  safeUnzip,
+  type UnzipLimits,
+  type UnzipResult,
+} from './archive/safe-unzip'
+export {
+  extractRefs,
+  normalizeCode,
+  normalizeSeverity,
+  parseErcDrc,
+  parseErcDrcJson,
+  parseErcDrcText,
+} from './parser/erc-drc'
+
+export const KICAD_PACKAGE_VERSION = '0.3.0'
