@@ -231,6 +231,15 @@ export class MutationsService {
     return p.projectId
   }
 
+  async projectIdForStep(stepId: string): Promise<string> {
+    const s = await this.prisma.debugStep.findUnique({
+      where: { id: stepId },
+      select: { projectId: true },
+    })
+    if (!s) throw new NotFoundException(`步骤不存在: ${stepId}`)
+    return s.projectId
+  }
+
   async projectIdForAnnotation(id: string): Promise<string> {
     const a = await this.prisma.photoAnnotation.findUnique({
       where: { id },

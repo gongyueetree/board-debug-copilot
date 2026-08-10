@@ -33,6 +33,10 @@ jobs:
       - name: 检查源码目录整洁
         run: pnpm check:tracked
 
+      # Prisma client 是生成物。db 的 typecheck 脚本已自带 generate，
+      # 这里再显式跑一次，让失败时能一眼看出是生成阶段还是类型阶段的问题。
+      - run: pnpm db:generate
+
       - run: pnpm lint
       - run: pnpm typecheck
       - run: pnpm build
@@ -131,7 +135,7 @@ jobs:
           cd apps/m2k-bridge
           python -m venv .venv
           .venv/bin/pip install -q -r requirements.txt
-          BRIDGE_MOCK=true BRIDGE_REQUIRE_PAIRING=false \
+          BRIDGE_MOCK=true BRIDGE_REQUIRE_PAIRING=false BRIDGE_ALLOW_UNPAIRED_DEBUG=true \
             .venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 3777 > /tmp/bridge.log 2>&1 &
           for i in $(seq 1 30); do
             curl -sf http://127.0.0.1:3777/status && break

@@ -45,6 +45,12 @@ ALLOWED_ORIGINS = [
 #: silently: /status reports it so the UI can warn.
 PAIRING_REQUIRED = os.getenv("BRIDGE_REQUIRE_PAIRING", "true").lower() == "true"
 
+#: Scenario switching changes the waveform, the measurements and therefore the
+#: AI diagnosis. It is mock-only, but that is not a reason to leave it open -
+#: anything that changes what the operator sees is a control surface. CI and
+#: the built-in demo opt out explicitly rather than by default.
+ALLOW_UNPAIRED_DEBUG = os.getenv("BRIDGE_ALLOW_UNPAIRED_DEBUG", "false").lower() == "true"
+
 Scenario = Literal["normal", "gain_error", "clipping", "noisy", "no_response"]
 
 app = FastAPI(title="M2K Bridge", version="0.3.0")
@@ -63,14 +69,7 @@ pairing = PairingManager()
 # ---------------------------------------------------------------- auth
 
 
-def require_token(authorization: str | None = Header(default=None)) -> None:
-    """Guard for anything that can drive hardware.
-
-    MOCK_MODE does not bypass this: a demo that skips the security step is not
-    demonstrating the product.
-    """
-    if not PAIRING_REQUIRED:
-        return
+def _check_token(authorization: str | None) -> None:
     token = authorization[7:] if authorization and authorization.startswith("Bearer ") else None
     if not pairing.is_valid(token):
         raise HTTPException(
@@ -80,6 +79,28 @@ def require_token(authorization: str | None = Header(default=None)) -> None:
                 "message": "未配对或 token 已失效。请在 Bridge 控制台查看配对码并重新配对",
             },
         )
+
+
+def require_token(authorization: str | None = Header(default=None)) -> None:
+    """Guard for anything that can drive hardware.
+
+    MOCK_MODE does not bypass this: a demo that skips the security step is not
+    demonstrating the product.
+    """
+    if not PAIRING_REQUIRED:
+        return
+    _check_token(authorization)
+
+
+def require_debug_token(authorization: str | None = Header(default=None)) -> None:
+    """Guard for the mock scenario switch.
+
+    Same rule as hardware control, with one explicit escape hatch for CI and
+    the built-in demo. BRIDGE_MOCK alone is not an escape hatch.
+    """
+    if not PAIRING_REQUIRED or ALLOW_UNPAIRED_DEBUG:
+        return
+    _check_token(authorization)
 
 
 def _adapter_error(exc: AdapterError) -> HTTPException:
@@ -154,6 +175,7 @@ def status() -> dict:
         "detail": s.detail,
         "adapter": adapter.name,
         "pairingRequired": PAIRING_REQUIRED,
+        "allowUnpairedDebug": ALLOW_UNPAIRED_DEBUG,
         **pairing.status(),
     }
 
@@ -186,7 +208,11 @@ def disconnect(_: None = Depends(require_token)) -> dict:
 
 @app.get("/pairing/status")
 def pairing_status() -> dict:
-    return {**pairing.status(), "pairingRequired": PAIRING_REQUIRED}
+    return {
+        **pairing.status(),
+        "pairingRequired": PAIRING_REQUIRED,
+        "allowUnpairedDebug": ALLOW_UNPAIRED_DEBUG,
+    }
 
 
 @app.post("/pairing/start")
@@ -282,7 +308,7 @@ def list_scenarios() -> dict:
 
 
 @app.post("/debug/scenario")
-def set_scenario(req: ScenarioRequest) -> dict:
+def set_scenario(req: ScenarioRequest, _: None = Depends(require_debug_token)) -> dict:
     if not isinstance(adapter, MockM2kAdapter):
         raise HTTPException(
             status_code=409,

@@ -117,7 +117,13 @@ export class MutationsController {
   }
 
   @Patch('debug-steps/:id')
-  updateStep(@Param('id') id: string, @Body() body: unknown) {
+  async updateStep(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Headers('authorization') authorization?: string,
+  ) {
+    // step id 不带项目信息，先反查归属再鉴权 —— 否则知道 id 就能改公共 Demo
+    await this.guard(await this.mutations.projectIdForStep(id), authorization)
     const input = z
       .object({
         status: StepStatusSchema.optional(),

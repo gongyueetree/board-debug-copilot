@@ -131,6 +131,41 @@ def test_emergency_stop_needs_no_token():
     assert client.post("/emergency-stop").status_code == 200
 
 
+# -- scenario switching is a control surface --------------------------
+
+
+def test_scenario_switch_requires_pairing():
+    """场景切换会改变波形、测量，进而改变 AI 诊断。
+    只在 mock 下可用不构成裸露的理由。"""
+    res = client.post("/debug/scenario", json={"scenario": "clipping"})
+    assert res.status_code == 401, f"未配对切换场景应 401，实得 {res.status_code}"
+
+
+def test_scenario_switch_works_after_pairing():
+    token = pair()
+    res = client.post("/debug/scenario", json={"scenario": "clipping"}, headers=auth(token))
+    assert res.status_code == 200
+    assert res.json()["scenario"] == "clipping"
+
+
+def test_unpaired_debug_escape_hatch(monkeypatch):
+    """CI 与内置 Demo 的显式豁免。BRIDGE_MOCK 本身不是豁免条件。"""
+    import src.main as m
+
+    monkeypatch.setattr(m, "ALLOW_UNPAIRED_DEBUG", True)
+    assert client.post("/debug/scenario", json={"scenario": "noisy"}).status_code == 200
+
+    # 豁免只对 debug 端点生效，不该顺带打开硬件控制
+    assert client.post("/awg", json={"amplitudeVpp": 0.4}).status_code == 401
+
+
+def test_status_reports_escape_hatch():
+    """豁免必须可见，不能静默生效。"""
+    body = client.get("/status").json()
+    assert "allowUnpairedDebug" in body
+    assert body["allowUnpairedDebug"] is False
+
+
 # -- scenarios ---------------------------------------------------------
 
 
@@ -146,7 +181,7 @@ def test_emergency_stop_needs_no_token():
 def test_scenario_values(scenario, expect_gain, expect_thd_above):
     """Values come from docs/05 section 11.1. Noise gives a few percent
     spread, so assert a band rather than equality."""
-    client.post("/debug/scenario", json={"scenario": scenario})
+    client.post("/debug/scenario", json={"scenario": scenario}, headers=auth(pair()))
     from src.main import adapter
 
     frame = adapter.read_scope_frame(0)
@@ -161,7 +196,7 @@ def test_scenario_is_deterministic():
     has to look the same tomorrow."""
     from src.main import adapter
 
-    client.post("/debug/scenario", json={"scenario": "gain_error"})
+    client.post("/debug/scenario", json={"scenario": "gain_error"}, headers=auth(pair()))
     a = adapter.read_scope_frame(7)
     b = adapter.read_scope_frame(7)
     assert a.ch1.tolist() == b.ch1.tolist()
