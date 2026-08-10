@@ -1,32 +1,37 @@
 """M2K Bridge - local-only ADALM2000 gateway.
 
-Security boundary (CLAUDE.md rule 5): binds 127.0.0.1 only and validates Origin.
-The cloud never touches USB; the browser talks to this process directly, which
-is why an https frontend can still reach ws://127.0.0.1 (localhost exemption).
+Security boundary (CLAUDE.md rule 5): binds 127.0.0.1 only, validates Origin,
+and requires a paired token for anything that can drive hardware. The cloud
+never touches USB; the browser talks to this process directly, which is why an
+https frontend can still reach ws://127.0.0.1 (localhost exemption).
 
-BRIDGE_MOCK=true synthesizes waveforms with numpy so the whole flow runs with
-no hardware. Scenario values come from docs/05 section 11.1.
+This module is routing and authorisation only. Waveform generation lives in
+adapters/, the wire format in protocol.py, pairing in pairing.py.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 from typing import Literal
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-# 相对导入只在按包运行时成立（uvicorn src.main:app）。PyInstaller 把入口
-# 当顶层脚本执行，没有父包，会 ImportError。两种方式都要能跑。
 try:
-    from .scenarios import SCENARIOS, SPECS, measure, synthesize
-except ImportError:  # pragma: no cover - 打包后的运行路径
-    from scenarios import SCENARIOS, SPECS, measure, synthesize
+    from .adapters import AdapterError, AwgConfig, ScopeConfig, create_adapter
+    from .adapters.base import AWG_MAX_FREQ, AWG_MAX_OFFSET, AWG_MAX_VPP, SCOPE_MAX_RATE
+    from .adapters.mock_m2k import MockM2kAdapter
+    from .pairing import PairingManager
+    from .protocol import error_frame, measurements_frame, waveform_frame
+except ImportError:  # pragma: no cover - packaged (PyInstaller) run
+    from adapters import AdapterError, AwgConfig, ScopeConfig, create_adapter
+    from adapters.base import AWG_MAX_FREQ, AWG_MAX_OFFSET, AWG_MAX_VPP, SCOPE_MAX_RATE
+    from adapters.mock_m2k import MockM2kAdapter
+    from pairing import PairingManager
+    from protocol import error_frame, measurements_frame, waveform_frame
 
-BRIDGE_MOCK = os.getenv("BRIDGE_MOCK", "true").lower() == "true"
 ALLOWED_ORIGINS = [
     o.strip()
     for o in os.getenv(
@@ -36,15 +41,13 @@ ALLOWED_ORIGINS = [
     if o.strip()
 ]
 
-# ADALM2000 hard limits - anything beyond these is rejected outright
-AWG_MAX_VPP = 10.0
-AWG_MAX_OFFSET = 5.0
-AWG_MAX_FREQ = 30_000_000.0
-SCOPE_MAX_RATE = 100_000_000.0
+#: Pairing can be disabled for automated tests and the built-in demo, but never
+#: silently: /status reports it so the UI can warn.
+PAIRING_REQUIRED = os.getenv("BRIDGE_REQUIRE_PAIRING", "true").lower() == "true"
 
 Scenario = Literal["normal", "gain_error", "clipping", "noisy", "no_response"]
 
-app = FastAPI(title="M2K Bridge", version="0.2.0")
+app = FastAPI(title="M2K Bridge", version="0.3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
@@ -53,131 +56,243 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_state: dict[str, object] = {
-    "scenario": os.getenv("BRIDGE_SCENARIO", "gain_error"),
-    "running": True,
-    "sample_rate": 1_000_000.0,
-    "awg_enabled": False,
-    "awg": None,
-}
+adapter = create_adapter()
+pairing = PairingManager()
 
 
-class Status(BaseModel):
-    connected: bool
-    device: str | None
-    serial: str | None
-    firmware: str | None
-    mock: bool
-    scenario: str
-    running: bool
+# ---------------------------------------------------------------- auth
+
+
+def require_token(authorization: str | None = Header(default=None)) -> None:
+    """Guard for anything that can drive hardware.
+
+    MOCK_MODE does not bypass this: a demo that skips the security step is not
+    demonstrating the product.
+    """
+    if not PAIRING_REQUIRED:
+        return
+    token = authorization[7:] if authorization and authorization.startswith("Bearer ") else None
+    if not pairing.is_valid(token):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "code": "NOT_PAIRED",
+                "message": "未配对或 token 已失效。请在 Bridge 控制台查看配对码并重新配对",
+            },
+        )
+
+
+def _adapter_error(exc: AdapterError) -> HTTPException:
+    status = 422 if exc.code == "LIMIT_EXCEEDED" else 503
+    return HTTPException(status_code=status, detail={"code": exc.code, "message": str(exc)})
+
+
+# ---------------------------------------------------------------- models
+
+
+class AwgRequest(BaseModel):
+    channel: Literal["W1", "W2"] = "W1"
+    wave: Literal["sine", "square", "triangle", "sawtooth", "dc"] = "sine"
+    freqHz: float = Field(default=1000.0, ge=0, le=AWG_MAX_FREQ)
+    amplitudeVpp: float = Field(default=0.4, ge=0, le=AWG_MAX_VPP)
+    offsetV: float = Field(default=0.0, ge=-AWG_MAX_OFFSET, le=AWG_MAX_OFFSET)
+    #: The frontend must have shown the confirm dialog first (CLAUDE.md rule 6).
+    #: Enforced here too, because the UI is not the only possible caller.
+    confirm: bool = False
+
+    def to_config(self) -> AwgConfig:
+        return AwgConfig(
+            channel=self.channel,
+            wave=self.wave,
+            freq_hz=self.freqHz,
+            amplitude_vpp=self.amplitudeVpp,
+            offset_v=self.offsetV,
+        )
+
+
+class ScopeRequest(BaseModel):
+    timebaseSPerDiv: float = 0.0005
+    sampleRate: float = Field(default=1_000_000.0, gt=0, le=SCOPE_MAX_RATE)
+    running: bool = True
+
+    def to_config(self) -> ScopeConfig:
+        return ScopeConfig(
+            timebase_s_per_div=self.timebaseSPerDiv,
+            sample_rate=self.sampleRate,
+            running=self.running,
+        )
 
 
 class ScenarioRequest(BaseModel):
     scenario: Scenario
 
 
-class AwgConfig(BaseModel):
-    channel: Literal["W1", "W2"] = "W1"
-    wave: Literal["sine", "square", "triangle", "sawtooth", "dc"] = "sine"
-    freqHz: float = Field(default=1000.0, ge=0, le=AWG_MAX_FREQ)
-    amplitudeVpp: float = Field(default=0.4, ge=0, le=AWG_MAX_VPP)
-    offsetV: float = Field(default=0.0, ge=-AWG_MAX_OFFSET, le=AWG_MAX_OFFSET)
-    #: The frontend must have shown the confirm dialog before sending a
-    #: dangerous value (CLAUDE.md rule 6). The bridge enforces it too, because
-    #: the UI is not the only possible caller.
-    confirm: bool = False
+class PairingVerifyRequest(BaseModel):
+    code: str = Field(min_length=6, max_length=6)
 
 
-class ScopeConfig(BaseModel):
-    timebaseSPerDiv: float = 0.0005
-    sampleRate: float = Field(default=1_000_000.0, gt=0, le=SCOPE_MAX_RATE)
-    running: bool = True
+class PairingRevokeRequest(BaseModel):
+    token: str | None = None
 
 
-def requires_confirm(cfg: AwgConfig) -> bool:
-    return cfg.amplitudeVpp > 5.0 or cfg.offsetV != 0.0
+# ---------------------------------------------------------------- status
 
 
-@app.get("/status", response_model=Status)
-def status() -> Status:
-    scenario = str(_state["scenario"])
-    if BRIDGE_MOCK:
-        return Status(
-            connected=True,
-            device="ADALM2000",
-            serial="104122A8BC2F",
-            firmware="0.39",
-            mock=True,
-            scenario=scenario,
-            running=bool(_state["running"]),
-        )
-    return Status(
-        connected=False,
-        device=None,
-        serial=None,
-        firmware=None,
-        mock=False,
-        scenario=scenario,
-        running=False,
-    )
-
-
-@app.get("/devices")
-def devices() -> dict[str, object]:
-    if BRIDGE_MOCK:
-        return {"devices": [{"uri": "mock://m2k", "name": "ADALM2000 (mock)"}]}
-    return {"devices": []}
-
-
-@app.get("/scenarios")
-def list_scenarios() -> dict[str, object]:
+@app.get("/status")
+def status() -> dict:
+    """Unauthenticated on purpose: the UI needs to know whether to show the
+    pairing prompt before it has a token."""
+    s = adapter.status()
     return {
-        "current": _state["scenario"],
-        "available": [{"id": s, "label": SPECS[s].label} for s in SCENARIOS],
+        "connected": s.connected,
+        "device": s.device,
+        "serial": s.serial,
+        "firmware": s.firmware,
+        "mock": s.mock,
+        "running": s.running,
+        "scenario": s.scenario,
+        "detail": s.detail,
+        "adapter": adapter.name,
+        "pairingRequired": PAIRING_REQUIRED,
+        **pairing.status(),
     }
 
 
-@app.post("/debug/scenario")
-def set_scenario(req: ScenarioRequest) -> dict[str, str]:
-    _state["scenario"] = req.scenario
-    return {"scenario": req.scenario}
+@app.get("/devices")
+def devices(_: None = Depends(require_token)) -> dict:
+    try:
+        return {"devices": adapter.list_devices()}
+    except AdapterError as exc:
+        raise _adapter_error(exc) from exc
+
+
+@app.post("/devices/connect")
+def connect(uri: str | None = None, _: None = Depends(require_token)) -> dict:
+    try:
+        s = adapter.connect(uri)
+    except AdapterError as exc:
+        raise _adapter_error(exc) from exc
+    return {"connected": s.connected, "device": s.device, "detail": s.detail}
+
+
+@app.post("/devices/disconnect")
+def disconnect(_: None = Depends(require_token)) -> dict:
+    adapter.disconnect()
+    return {"connected": False}
+
+
+# ---------------------------------------------------------------- pairing
+
+
+@app.get("/pairing/status")
+def pairing_status() -> dict:
+    return {**pairing.status(), "pairingRequired": PAIRING_REQUIRED}
+
+
+@app.post("/pairing/start")
+def pairing_start() -> dict:
+    return pairing.start()
+
+
+@app.post("/pairing/verify")
+def pairing_verify(req: PairingVerifyRequest) -> dict:
+    try:
+        token = pairing.verify(req.code)
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=403, detail={"code": "PAIRING_FAILED", "message": str(exc)}
+        ) from exc
+    return {"token": token, "expiresInDays": 30}
+
+
+@app.post("/pairing/revoke")
+def pairing_revoke(req: PairingRevokeRequest) -> dict:
+    return {"revoked": pairing.revoke(req.token)}
+
+
+# ---------------------------------------------------------------- control
 
 
 @app.post("/awg")
-def configure_awg(cfg: AwgConfig) -> dict[str, object]:
-    if requires_confirm(cfg) and not cfg.confirm:
+def configure_awg(req: AwgRequest, _: None = Depends(require_token)) -> dict:
+    config = req.to_config()
+    # Order matters: hardware limits are absolute, so they are checked before
+    # confirmation. A confirmed 20Vpp is still impossible.
+    try:
+        from .adapters.base import check_hardware_limits, requires_confirm
+    except ImportError:  # pragma: no cover
+        from adapters.base import check_hardware_limits, requires_confirm
+
+    try:
+        check_hardware_limits(config)
+    except AdapterError as exc:
+        raise _adapter_error(exc) from exc
+
+    if requires_confirm(config) and not req.confirm:
         raise HTTPException(
             status_code=428,
             detail={
                 "code": "CONFIRM_REQUIRED",
                 "message": "幅度 > 5Vpp 或偏置非 0，需要用户二次确认后重发",
-                "amplitudeVpp": cfg.amplitudeVpp,
-                "offsetV": cfg.offsetV,
+                "amplitudeVpp": req.amplitudeVpp,
+                "offsetV": req.offsetV,
             },
         )
-    _state["awg"] = cfg.model_dump()
-    _state["awg_enabled"] = True
-    return {"applied": True, "awg": _state["awg"]}
+
+    try:
+        return adapter.configure_awg(config)
+    except AdapterError as exc:
+        raise _adapter_error(exc) from exc
 
 
 @app.post("/awg/disable")
-def disable_awg() -> dict[str, bool]:
-    _state["awg_enabled"] = False
+def disable_awg(_: None = Depends(require_token)) -> dict:
+    adapter.disable_awg()
     return {"enabled": False}
 
 
 @app.post("/scope")
-def configure_scope(cfg: ScopeConfig) -> dict[str, object]:
-    _state["sample_rate"] = cfg.sampleRate
-    _state["running"] = cfg.running
-    return {"applied": True, "sampleRate": cfg.sampleRate, "running": cfg.running}
+def configure_scope(req: ScopeRequest, _: None = Depends(require_token)) -> dict:
+    try:
+        return adapter.configure_scope(req.to_config())
+    except AdapterError as exc:
+        raise _adapter_error(exc) from exc
 
 
 @app.post("/emergency-stop")
-def emergency_stop() -> dict[str, bool]:
-    _state["awg_enabled"] = False
-    _state["running"] = False
+def emergency_stop() -> dict:
+    """Deliberately unauthenticated: a stop button that can fail closed because
+    of an expired token is worse than no stop button."""
+    adapter.emergency_stop()
     return {"stopped": True}
+
+
+@app.get("/scenarios")
+def list_scenarios() -> dict:
+    if not isinstance(adapter, MockM2kAdapter):
+        return {"current": None, "available": []}
+    try:
+        from .scenarios import SPECS
+    except ImportError:  # pragma: no cover
+        from scenarios import SPECS
+    return {
+        "current": adapter.scenario,
+        "available": [{"id": k, "label": v.label} for k, v in SPECS.items()],
+    }
+
+
+@app.post("/debug/scenario")
+def set_scenario(req: ScenarioRequest) -> dict:
+    if not isinstance(adapter, MockM2kAdapter):
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "NOT_MOCK", "message": "场景切换仅在 BRIDGE_MOCK=true 下可用"},
+        )
+    adapter.set_scenario(req.scenario)
+    return {"scenario": req.scenario}
+
+
+# ---------------------------------------------------------------- stream
 
 
 def _origin_allowed(origin: str | None) -> bool:
@@ -186,38 +301,32 @@ def _origin_allowed(origin: str | None) -> bool:
 
 
 @app.websocket("/ws")
-async def ws(sock: WebSocket) -> None:
+async def ws(sock: WebSocket, token: str | None = Query(default=None)) -> None:
     if not _origin_allowed(sock.headers.get("origin")):
         await sock.close(code=4403)
+        return
+
+    # Browsers cannot set headers on a WebSocket handshake, so the token comes
+    # as a query parameter. Same check, different carrier.
+    header = sock.headers.get("authorization")
+    supplied = token or (header[7:] if header and header.startswith("Bearer ") else None)
+    if PAIRING_REQUIRED and not pairing.is_valid(supplied):
+        await sock.close(code=4401)
         return
 
     await sock.accept()
     sequence = 0
     try:
         while True:
-            if not _state["running"]:
-                await asyncio.sleep(0.2)
+            try:
+                frame = adapter.read_scope_frame(sequence)
+            except AdapterError as exc:
+                await sock.send_text(error_frame(exc.code, str(exc)))
+                await asyncio.sleep(1.0)
                 continue
 
-            rate = float(_state["sample_rate"])
-            ch1, ch2 = synthesize(str(_state["scenario"]), sample_rate=rate, sequence=sequence)
-
-            await sock.send_text(
-                json.dumps(
-                    {
-                        "type": "waveform",
-                        # Decimate for transport: the browser only needs display
-                        # resolution, and the raw array never leaves this process.
-                        "ch1": [round(v, 4) for v in ch1[::4].tolist()],
-                        "ch2": [round(v, 4) for v in ch2[::4].tolist()],
-                        "meta": {"fs": rate, "ts": sequence * 0.1, "sequence": sequence},
-                    }
-                )
-            )
-            await sock.send_text(
-                json.dumps({"type": "measurements", **measure(ch1, ch2, rate)})
-            )
-
+            await sock.send_text(waveform_frame(frame))
+            await sock.send_text(measurements_frame(frame))
             sequence += 1
             await asyncio.sleep(0.1)
     except WebSocketDisconnect:
@@ -228,6 +337,9 @@ async def ws(sock: WebSocket) -> None:
 
 def main() -> None:
     import uvicorn
+
+    if PAIRING_REQUIRED and not pairing.status()["paired"]:
+        print("\n未配对。网页点「连接本地 Bridge」后，本窗口会显示配对码。\n", flush=True)
 
     uvicorn.run(app, host="127.0.0.1", port=3777)
 

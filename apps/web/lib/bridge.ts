@@ -12,8 +12,65 @@ export interface BridgeStatus {
   serial: string | null
   firmware: string | null
   mock: boolean
-  scenario: string
+  scenario: string | null
   running: boolean
+  adapter: string
+  detail: string | null
+  pairingRequired: boolean
+  paired: boolean
+  pairingPending: boolean
+  codeExpiresInSeconds: number
+}
+
+const TOKEN_KEY = 'bdc.bridge.token'
+
+/** token 存 localStorage：Bridge 是本机服务，token 不该跟着云端账号走 */
+export const bridgeToken = {
+  get: () => (typeof window === 'undefined' ? null : localStorage.getItem(TOKEN_KEY)),
+  set: (t: string) => localStorage.setItem(TOKEN_KEY, t),
+  clear: () => localStorage.removeItem(TOKEN_KEY),
+}
+
+export function bridgeHeaders(): Record<string, string> {
+  const t = bridgeToken.get()
+  return t ? { authorization: `Bearer ${t}` } : {}
+}
+
+export interface PairingApi {
+  start: () => Promise<{ expiresInSeconds: number }>
+  verify: (code: string) => Promise<string>
+  revoke: () => Promise<void>
+}
+
+export const bridgePairing: PairingApi = {
+  async start() {
+    const res = await fetch(`${BRIDGE_URL}/pairing/start`, { method: 'POST' })
+    if (!res.ok) throw new Error('无法发起配对，Bridge 可能未运行')
+    return res.json()
+  },
+  async verify(code: string) {
+    const res = await fetch(`${BRIDGE_URL}/pairing/verify`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ code }),
+    })
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}))
+      throw new Error(d?.detail?.message ?? '配对失败')
+    }
+    const { token } = (await res.json()) as { token: string }
+    bridgeToken.set(token)
+    return token
+  },
+  async revoke() {
+    const token = bridgeToken.get()
+    await fetch(`${BRIDGE_URL}/pairing/revoke`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ token }),
+    }).catch(() => {})
+    bridgeToken.clear()
+  },
 }
 
 export interface AwgRequest {
@@ -61,7 +118,11 @@ export function useBridge() {
     if (!status?.connected) return
     let closed = false
 
-    const ws = new WebSocket(`${BRIDGE_URL.replace(/^http/, 'ws')}/ws`)
+    // 浏览器 WebSocket 握手不能设 header，token 只能走 query
+    const token = bridgeToken.get()
+    const ws = new WebSocket(
+      `${BRIDGE_URL.replace(/^http/, 'ws')}/ws${token ? `?token=${encodeURIComponent(token)}` : ''}`,
+    )
     wsRef.current = ws
     ws.onopen = () => !closed && setWsOpen(true)
     ws.onclose = () => !closed && setWsOpen(false)
@@ -90,7 +151,8 @@ export function useBridge() {
   const applyAwg = useCallback(async (req: AwgRequest) => {
     const res = await fetch(`${BRIDGE_URL}/awg`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      // 控制类接口需要配对 token；未配对时 Bridge 回 401
+      headers: { 'content-type': 'application/json', ...bridgeHeaders() },
       body: JSON.stringify(req),
     })
     if (res.status === 428) {
@@ -105,7 +167,7 @@ export function useBridge() {
     async (scenario: Scenario) => {
       await fetch(`${BRIDGE_URL}/debug/scenario`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...bridgeHeaders() },
         body: JSON.stringify({ scenario }),
       })
       await refreshStatus()
@@ -117,7 +179,7 @@ export function useBridge() {
     async (running: boolean) => {
       await fetch(`${BRIDGE_URL}/scope`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', ...bridgeHeaders() },
         body: JSON.stringify({ running, sampleRate: 1_000_000 }),
       })
       await refreshStatus()
@@ -125,5 +187,15 @@ export function useBridge() {
     [refreshStatus],
   )
 
-  return { status, waveform, measurements, wsOpen, applyAwg, setScenario, setRunning }
+  return {
+    status,
+    waveform,
+    measurements,
+    wsOpen,
+    applyAwg,
+    setScenario,
+    setRunning,
+    // 配对成功后要立刻重查状态，UI 才能从配对卡切到工作台
+    refreshStatus,
+  }
 }

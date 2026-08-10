@@ -13,6 +13,7 @@ import { useMemo, useState } from 'react'
 import type { Measurements, Scenario } from '@app/contracts'
 import { needsConfirm, useBridge, type AwgRequest } from '@/lib/bridge'
 import { useAnalyzeCapture, useSaveCapture } from '@/lib/mutations'
+import { PairingCard } from './PairingCard'
 import { WiringGuide } from './WiringGuide'
 
 const PRESETS: { id: string; name: string; desc: string; awg: AwgRequest }[] = [
@@ -336,7 +337,8 @@ BRIDGE_MOCK=true uvicorn src.main:app --host 127.0.0.1 --port 3777`}
         </section>
 
         {/* 右：AI 调试参谋 */}
-        <aside className="w-[320px] shrink-0 overflow-auto">
+        <aside className="w-[320px] shrink-0 space-y-4 overflow-auto">
+          <PairingCard status={bridge.status} onPaired={() => void bridge.refreshStatus()} />
           <SectionCard title="AI 调试参谋" bodyClassName="p-3">
             {m ? (
               <BenchAnalysis measurements={m} scenario={bridge.status.scenario} />
@@ -480,7 +482,14 @@ function Measure({ label, ch1, ch2 }: { label: string; ch1: string; ch2: string 
  * 实时解读。判定顺序固定：先削顶 → 再增益 → 再频率 → 再噪声（docs/05 §8.4 规则 8）。
  * 这一层是确定性的，与规则引擎同源；LLM 分析走「保存捕获后分析」。
  */
-function BenchAnalysis({ measurements: m, scenario }: { measurements: Measurements; scenario: string }) {
+// scenario 可为 null：真实适配器没有「场景」概念，那是 mock 专有的
+function BenchAnalysis({
+  measurements: m,
+  scenario,
+}: {
+  measurements: Measurements
+  scenario: string | null
+}) {
   const expectedGain = 10
   const thd = m.ch2.thdnPct ?? 0
   const railed = m.ch2.vmax > 4.9 || m.ch2.vmin < 0.1
