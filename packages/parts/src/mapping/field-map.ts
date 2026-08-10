@@ -1,34 +1,45 @@
 import type { NormalizedPart, PartLifecycle, RawPart } from '../types'
-import { mapCategory } from './category-map'
+import { inferCategory, mapCategory } from './category-map'
 import { normalizePackage } from './unit'
 import { normalizeMpn } from '../normalize/mpn'
 import { extractParams } from '../normalize/params'
 
 /**
- * ★ 参考文件的主要落地处：远端字段 → NormalizedPart。
+ * ★ 远端字段 → NormalizedPart。
  *
- * 现在这里是**按最常见的字段名猜的**，因为参考文件（§2.2 的九项）还没提供。
- * 拿到之后把 FIELD_PATHS 换成真实字段名即可，其余代码一行都不用动 ——
- * 这正是把映射收敛到一个文件的意义。
+ * ezPLM 手册 §2「返回结果中最重要的字段」明确列了这几个：
+ *   id / mpn / manufacturer / footprint / symbol / pdf / attributes
  *
- * 在换成真实映射之前，remote provider 由 factory 拦住不让启用（见
- * providers/remote.ts 的 MISSING_SPEC），所以这里的猜测不会静默产出错误参数。
+ * 手册没有给完整字段字典，也没有响应样例，所以：
+ *   - 明确列出的字段按手册写死（第一个候选就是手册里的名字）
+ *   - 其余保留常见别名做兜底，命中不了就是 undefined，不编
+ *   - **没有 category 字段** —— ezPLM 不返回类目，只能从 mpn/description 推断，
+ *     见 category-map.ts 的 inferCategory
+ *   - **没有 lifecycle / rohs / 价格库存** —— 这些字段在 ezPLM 里不存在，
+ *     留着别名兜底是为了将来接别的库时不用改结构，今天一律取不到
+ *
+ * `attributes` 的内部结构手册没写。flattenParams 同时支持 `{k:v}` 与
+ * `[{name,value}]` 两种形状 —— 拿到真实样例前这是唯一诚实的做法，
+ * 两种都不匹配时参数为空，`__meta.complete=false` 会如实反映出来。
  */
 export const FIELD_PATHS = {
+  // 手册明确的字段
+  id: ['id', 'partId', 'uuid'],
   mpn: ['mpn', 'partNumber', 'part_number', 'code', '型号'],
   manufacturer: ['manufacturer', 'brand', 'mfr', '品牌', '厂商'],
+  packageCase: ['footprint', 'package', 'packageCase', 'encap', '封装'],
+  datasheetUrl: ['pdf', 'datasheet', 'datasheetUrl', 'pdfUrl', '规格书'],
+  params: ['attributes', 'params', 'parameters', 'specs', '参数'],
+  symbol: ['symbol'],
+
+  // ezPLM 不返回这些，留着兜底
   category: ['category', 'categoryName', 'catalogName', '类目', '分类'],
   description: ['description', 'desc', 'title', '描述'],
-  packageCase: ['package', 'packageCase', 'encap', '封装'],
-  datasheetUrl: ['datasheet', 'datasheetUrl', 'pdfUrl', '规格书'],
   lifecycle: ['lifecycle', 'status', 'lifeCycle', '生命周期'],
   rohs: ['rohs', 'isRohs'],
-  /** 参数通常是个嵌套对象或 [{name,value}] 数组 */
-  params: ['params', 'parameters', 'attributes', 'specs', '参数'],
   price: ['price', 'priceRef', 'unitPrice'],
   stock: ['stock', 'inventory', 'qty'],
   leadTime: ['leadTime', 'leadTimeDays'],
-  id: ['id', 'partId', 'uuid'],
 } as const
 
 function pick(raw: RawPart, keys: readonly string[]): unknown {
@@ -76,7 +87,16 @@ export function toNormalizedPart(raw: RawPart, provider: string): NormalizedPart
   const rawMpn = str(pick(raw, FIELD_PATHS.mpn))
   if (!rawMpn) return null
 
-  const category = mapCategory(str(pick(raw, FIELD_PATHS.category)))
+  // ezPLM 不返回 category，退到从 mpn + 描述推断。推不出来落 OTHER，
+  // 而 OTHER 的参数白名单是空的 —— 认不出就不抽参数，不是抽错参数。
+  const remoteCategory = str(pick(raw, FIELD_PATHS.category))
+  const category = remoteCategory
+    ? mapCategory(remoteCategory)
+    : inferCategory({
+        mpn: rawMpn,
+        description: str(pick(raw, FIELD_PATHS.description)),
+        symbol: str(pick(raw, FIELD_PATHS.symbol)),
+      })
   const lifecycleRaw = str(pick(raw, FIELD_PATHS.lifecycle))?.toLowerCase().trim()
 
   const price = num(pick(raw, FIELD_PATHS.price))

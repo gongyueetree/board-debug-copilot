@@ -1,0 +1,64 @@
+[
+  {
+    "key": "test-api-key-123",
+    "method": "GET",
+    "path": "/api/v1/api-key/parts",
+    "params": {
+      "keyword": "TPS79301DBVR",
+      "pageSize": "10"
+    },
+    "ts": "1700000000",
+    "nonce": "0123456789abcdef",
+    "canonical": "GET\n/api/v1/api-key/parts\nkeyword=TPS79301DBVR&pageSize=10\n1700000000\n0123456789abcdef",
+    "signature": "oErXJdwxQghQ0A9BWnffNX_T6lJIPtgvBj2ZJFYftIk"
+  },
+  {
+    "key": "test-api-key-123",
+    "method": "GET",
+    "path": "/api/v1/api-key/reference-designs",
+    "params": {
+      "partlibId": "019137eb-d4c0-76c9-b1f5-88ee84d727a6",
+      "pageSize": "10"
+    },
+    "ts": "1700000001",
+    "nonce": "nonce-2",
+    "canonical": "GET\n/api/v1/api-key/reference-designs\npageSize=10&partlibId=019137eb-d4c0-76c9-b1f5-88ee84d727a6\n1700000001\nnonce-2",
+    "signature": "sfc0Mbl9xcZjbPqZYtzkxYgWmdQ_0tiEoEYj1uS48jM"
+  },
+  {
+    "key": "test-api-key-123",
+    "method": "GET",
+    "path": "/api/v1/api-key/parts",
+    "params": {
+      "pageSize": "10",
+      "keyword": "TPS79301DBVR",
+      "cursor": ""
+    },
+    "ts": "1700000000",
+    "nonce": "0123456789abcdef",
+    "canonical": "GET\n/api/v1/api-key/parts\nkeyword=TPS79301DBVR&pageSize=10\n1700000000\n0123456789abcdef",
+    "signature": "oErXJdwxQghQ0A9BWnffNX_T6lJIPtgvBj2ZJFYftIk"
+  },
+  {
+    "key": "k",
+    "method": "GET",
+    "path": "/api/v1/api-key/parts",
+    "params": {
+      "keyword": "MCP4725A0T-E/CH"
+    },
+    "ts": "1700000002",
+    "nonce": "n3",
+    "canonical": "GET\n/api/v1/api-key/parts\nkeyword=MCP4725A0T-E%2FCH\n1700000002\nn3",
+    "signature": "ZSwes1vVvSSpN5WzHbtZTB_pVe8kUD5BlQ2Auw3D-Gc"
+  },
+  {
+    "key": "k",
+    "method": "GET",
+    "path": "/api/v1/api-key/parts",
+    "params": {},
+    "ts": "1700000003",
+    "nonce": "n4",
+    "canonical": "GET\n/api/v1/api-key/parts\n\n1700000003\nn4",
+    "signature": "oaKqD4YY8A0orVrB68XH_V4pvfm9O6xDncaVM8axjx4"
+  }
+]

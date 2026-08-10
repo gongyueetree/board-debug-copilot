@@ -1,39 +1,31 @@
-import type { ParametricQuery, RawAlternate, RawPart } from '../types'
-import { PartsError, type PartsCapabilities, type PartsProvider } from './base'
+import { EZPLM_BASE_URL } from './ezplm'
 
 /**
- * 110 万器件库 HTTP 适配。**唯一允许写 fetch 的文件。**
+ * 接入信息的缺口清单。
  *
- * 与 packages/ai 里「SDK import 只允许出现在 providers/」同一条纪律：
- * 远端字段长什么样、分页怎么翻、鉴权怎么做，只影响这个文件与 mapping/。
+ * P9 写这个文件时九项一项都没有，所以 remote provider 直接不可用。
+ * 现在 ezPLM 的手册与三份签名 demo 到位了，**九项里补上了五项**，
+ * 剩下这几项仍然缺 —— 它们不阻塞接入，但会限制能力，所以要在 /health
+ * 里显形，而不是等到匹配率上不去时才去猜原因。
  *
- * ── 当前状态：未配置 ──────────────────────────────────────────
- * 技术方案 §2.2 列了九项参考信息，一项都还没拿到。**这里不猜。**
- * 猜出来的字段映射会安静地产出错误参数，而错误的 vsAbsMax 会让 AI 得出
- * 一个看起来极其笃定的错误根因 —— 比查不到危险得多。
- *
- * 所以：缺参考文件时每个方法都抛 NOT_CONFIGURED，由 PartsService 降级到
- * 镜像 / mock，并在 /health 的 parts.missingSpec 里把缺什么列出来。
- *
- * 拿到参考文件后要做的事，按顺序：
- *   1. 填 MISSING_SPEC 对应的常量（ENDPOINTS / AUTH / PAGING / RATE_LIMIT）
- *   2. 把 mapping/field-map.ts 的 FIELD_PATHS 换成真实字段名
- *   3. 把 mapping/category-map.ts 的 EXPLICIT_CATEGORY_MAP 填上类目字典
- *   4. 删掉 assertConfigured() 的调用
- *   5. 跑 scripts/backfill-parts.ts --dry-run 看分层匹配率
+ * 判据很简单：**缺了会让我们编数据的，阻塞接入；缺了只是少一项能力的，不阻塞。**
+ * 下面这几项属于后者，所以 provider 可用，但 capabilities 里对应位是 false。
  */
-
-/** §2.2 的九项。填一项删一项，全空说明一项都没拿到。 */
 export const MISSING_SPEC = [
-  'baseUrl: Base URL 与环境区分',
-  'auth: 鉴权方式（Header / 签名 / 有效期 / 刷新）',
-  'endpoints: MPN 精确查 / 关键词模糊查 / 批量查 / 类目树 / 替代料',
-  'paging: 分页与总量约定',
-  'fields: 完整字段字典（含义、类型、单位、可空性）',
-  'samples: 至少 3 条真实响应（阻容 / IC / 空结果）',
-  'rateLimit: QPS、并发、日配额',
-  'errorCodes: 错误码表',
-  'categories: 类目字典',
+  'fields: 完整字段字典 —— 手册只列了 id/mpn/manufacturer/footprint/symbol/pdf/attributes 七个「最重要的字段」，没有类型、单位、可空性',
+  'samples: 真实响应样例 —— 一条都没有。attributes 的内部结构因此是盲的，参数抽取率无法预估',
+  'paging: meta 的字段名 —— 手册只说「data + meta 的分页结构」，没写游标叫什么',
+  'rateLimit: 具体配额数字 —— 只知道按天计、超了 429，不知道每天多少次',
+  'categories: 类目字典 —— ezPLM 根本不返回 category，只能从 mpn/描述推断',
+] as const
+
+/** 已经拿到的（留在这里是为了让「还缺什么」有对照） */
+export const RESOLVED_SPEC = [
+  'baseUrl: https://www.ezplm.cn',
+  'auth: HMAC-SHA256，X-API-Key / X-Timestamp / X-Nonce / X-Signature，nonce 一次性',
+  'endpoints: GET /api/v1/api-key/parts 与 GET /api/v1/api-key/reference-designs',
+  'errorCodes: 400 参数或签名头缺失 / 401 签名错 / 404 partlibId 错 / 429 当天配额用尽',
+  'pagingParams: cursor + pageSize（请求侧）',
 ] as const
 
 export interface RemoteConfig {
@@ -44,24 +36,21 @@ export interface RemoteConfig {
   maxConcurrency: number
 }
 
-/** 指数退避：429 与 5xx 才重试，4xx（除 429）重试没有意义 */
-async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
-  let lastErr: unknown
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn()
-    } catch (err) {
-      lastErr = err
-      if (!(err instanceof PartsError) || !err.retryable) throw err
-      if (i === attempts - 1) break
-      // 200ms → 400ms → 800ms
-      await new Promise((r) => setTimeout(r, 200 * 2 ** i))
-    }
-  }
-  throw lastErr
+export const DEFAULT_REMOTE_BASE_URL = EZPLM_BASE_URL
+
+/** 分片。ezPLM 没有批量端点，这个留给将来接别的库用。 */
+export function chunk<T>(items: T[], size: number): T[][] {
+  const out: T[][] = []
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
+  return out
 }
 
-/** 分片 + 并发上限。BOM 一次上百行，不做这个第一次真实解析就会被限流打回。 */
+/**
+ * 并发上限。
+ *
+ * ezPLM 的配额按天计而不是按 QPS，所以它的 batchGetByMpn 是**串行**的 ——
+ * 并发只会更快烧完当天额度。这个函数留给按 QPS 限流的库。
+ */
 export async function mapWithConcurrency<T, R>(
   items: T[],
   limit: number,
@@ -79,67 +68,3 @@ export async function mapWithConcurrency<T, R>(
   await Promise.all(workers)
   return out
 }
-
-export function chunk<T>(items: T[], size: number): T[][] {
-  const out: T[][] = []
-  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size))
-  return out
-}
-
-export class RemotePartsProvider implements PartsProvider {
-  readonly name = 'remote' as const
-
-  /**
-   * 参考文件到位之前，能力一律 false。
-   * 上游据此走本地兜底而不是拿到空数组以为「远端说没有」。
-   */
-  readonly capabilities: PartsCapabilities = {
-    exactLookup: false,
-    keywordSearch: false,
-    batchLookup: false,
-    alternates: false,
-    lifecycle: false,
-    parametric: false,
-  }
-
-  constructor(private readonly config: RemoteConfig) {}
-
-  private assertConfigured(): never {
-    throw new PartsError(
-      `器件库 API 尚未接入：缺少 ${MISSING_SPEC.length} 项接入信息。` +
-        `见 docs/11-parts-database.md 与 packages/parts/src/providers/remote.ts 的说明`,
-      'NOT_CONFIGURED',
-    )
-  }
-
-  async getByMpn(_mpn: string): Promise<RawPart | null> {
-    this.assertConfigured()
-  }
-
-  async batchGetByMpn(_mpns: string[]): Promise<Map<string, RawPart>> {
-    this.assertConfigured()
-  }
-
-  async searchByKeyword(_q: string): Promise<RawPart[]> {
-    this.assertConfigured()
-  }
-
-  async searchParametric(_q: ParametricQuery): Promise<RawPart[]> {
-    this.assertConfigured()
-  }
-
-  async getAlternates(_mpn: string): Promise<RawAlternate[]> {
-    this.assertConfigured()
-  }
-
-  async health() {
-    return {
-      degraded: true,
-      lastError: `未接入：缺 ${MISSING_SPEC.length} 项接入信息`,
-      latencyMs: 0,
-    }
-  }
-}
-
-// 留给接入时用，现在没有调用方；导出以免被 TS 判成未使用
-export const __internals = { withRetry }

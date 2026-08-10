@@ -61,3 +61,43 @@ export function guessCategoryFromRef(ref: string): PartCategory {
   }
   return byRef[head] ?? 'OTHER'
 }
+
+/**
+ * 从 MPN 前缀 + 描述 + 符号名推断类目。
+ *
+ * ezPLM **不返回 category 字段**，而 `PARAM_WHITELIST` 是按类目抽参数的 ——
+ * 没有类目就一个参数都抽不出来。所以退到推断。
+ *
+ * 推不出来落 `OTHER`，`OTHER` 的白名单是空的：**认不出就不抽参数，
+ * 而不是抽错参数**。抽错的 vsAbsMax 比抽不到危险得多。
+ */
+const MPN_PREFIX: [RegExp, PartCategory][] = [
+  // 运放：ADI / TI / Microchip 的常见系列
+  [/^(AD8|ADA4|OPA|OP\d|LM3(58|24)|TLV\d|MCP6|LT1\d{3})/i, 'OPAMP'],
+  // LDO
+  [/^(TPS7|LP\d{4}|LM11\d{2}|MIC5\d{3}|AMS1117|XC6\d{3}|RT9\d{3})/i, 'LDO'],
+  // 开关电源
+  [/^(TPS5|TPS6|LM2\d{3}|MP\d{4}|LMR\d{3}|AOZ\d{4})/i, 'DCDC'],
+  [/^(ADS1|ADS8|MCP3\d{3}|ADC\d)/i, 'ADC'],
+  [/^(MCP4\d{3}|DAC\d|AD56)/i, 'DAC'],
+  [/^(STM32|GD32|ESP32|ATMEGA|ATSAM|NRF5|RP2\d{3}|PIC\d{2})/i, 'MCU'],
+  [/^(W25Q|AT24C|24LC|MX25|IS4\d)/i, 'MEMORY'],
+  [/^(SN65|MAX48|MAX32\d\d|ADM3|TJA1)/i, 'TRANSCEIVER'],
+]
+
+export function inferCategory(input: {
+  mpn?: string
+  description?: string
+  symbol?: string
+}): PartCategory {
+  const mpn = (input.mpn ?? '').trim()
+  for (const [re, cat] of MPN_PREFIX) if (re.test(mpn)) return cat
+
+  // 描述与符号名走关键词表（中英文都认）
+  for (const text of [input.description, input.symbol]) {
+    if (!text) continue
+    const byKeyword = mapCategory(text)
+    if (byKeyword !== 'OTHER') return byKeyword
+  }
+  return 'OTHER'
+}

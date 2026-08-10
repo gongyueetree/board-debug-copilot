@@ -27,7 +27,8 @@
     "test:kicad-real": "tsx scripts/test-kicad-real.ts",
     "test:storage-real": "tsx --env-file-if-exists=.env scripts/test-storage-real.ts",
     "parts:backfill": "tsx --env-file-if-exists=.env scripts/backfill-parts.ts",
-    "parts:warm": "tsx --env-file-if-exists=.env scripts/warm-parts.ts"
+    "parts:warm": "tsx --env-file-if-exists=.env scripts/warm-parts.ts",
+    "test:parts-real": "tsx --env-file-if-exists=.env scripts/test-parts-real.ts"
   },
   "devDependencies": {
     "@app/kicad": "workspace:*",

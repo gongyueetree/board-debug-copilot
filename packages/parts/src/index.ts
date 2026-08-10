@@ -5,6 +5,7 @@ import { Mirror, type MirrorStore } from './cache/mirror'
 import { normalizeMpn } from './normalize/mpn'
 import { PartsError, type PartsProvider } from './providers/base'
 import { createPartsProvider, type PartsProviderInfo } from './providers/factory'
+import { EzplmPartsProvider, type EzplmReferenceDesign } from './providers/ezplm'
 import type {
   ComponentLike,
   MatchResult,
@@ -30,7 +31,20 @@ export {
 } from './match/scoring'
 export { LruCache } from './cache/memory'
 export { Mirror, type MirrorStore } from './cache/mirror'
-export { chunk, mapWithConcurrency, MISSING_SPEC } from './providers/remote'
+export {
+  chunk,
+  mapWithConcurrency,
+  MISSING_SPEC,
+  RESOLVED_SPEC,
+  DEFAULT_REMOTE_BASE_URL,
+} from './providers/remote'
+export {
+  EzplmPartsProvider,
+  EZPLM_BASE_URL,
+  type EzplmConfig,
+  type EzplmReferenceDesign,
+} from './providers/ezplm'
+export { canonicalQuery, canonicalRequest, signRequest } from './providers/ezplm-signing'
 export { createPartsProvider, type PartsProviderInfo } from './providers/factory'
 
 export interface PartsServiceOptions {
@@ -156,6 +170,29 @@ export class PartsService {
         confidence: Math.min(0.6, h.cosine),
         reason: `本地兜底：同类目 ${self.category}，语义相似 ${h.cosine.toFixed(2)}`,
       }))
+  }
+
+  /**
+   * 参考设计。ezPLM 独有的能力，方案里没算到。
+   *
+   * 一颗芯片的官方参考电路，对「你的设计和参考设计差在哪」这类问题比参数表
+   * 更直接。provider 没这个能力时返回空数组 —— 这里可以返回空，因为「没有
+   * 参考设计」和「不支持参考设计」对调用方是同一件事：都没有可用的参考电路。
+   * （替代料不一样：那里返回空会让 LLM 以为「确实没有替代料」，所以走本地兜底。）
+   */
+  async getReferenceDesigns(rawMpn: string): Promise<EzplmReferenceDesign[]> {
+    const p = this.provider
+    if (!(p instanceof EzplmPartsProvider)) return []
+    const mpn = normalizeMpn(rawMpn)
+    try {
+      const raw = await p.getByMpn(mpn)
+      const id = raw && typeof raw.id === 'string' ? raw.id : null
+      if (!id) return []
+      return await p.getReferenceDesigns(id)
+    } catch (err) {
+      this.lastError = err instanceof PartsError ? `${err.code}: ${err.message}` : String(err)
+      return []
+    }
   }
 
   /** 匹配单个组件，四层管线见 match/index.ts */

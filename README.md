@@ -22,6 +22,8 @@ AI 智能体综合**设计上下文 + 元器件知识 + 测量数据 + 视觉信
 | ADALM2000 Mock Bridge | ✅ VERIFIED | CI `Bridge (pytest)` job：24 项 + 冒烟里的危险操作拦截 |
 | **ADALM2000 真实硬件** | ⚠️ **EXPERIMENTAL / NOT RUN** | 没有硬件也没装 libm2k。checklist 见 [docs/10](docs/10-adalm2000-hardware-validation.md)，`hardwareVerified` 保持 `false` |
 | 真实 LLM（Gemini） | ✅ VERIFIED | `LLM_PROVIDER=gemini pnpm test:agent` 11/11（早期验证） |
+| ezPLM 器件库 · 签名算法 | ✅ VERIFIED | 对厂商 demo 的 golden vector 逐条比对，`pnpm test` 内 |
+| **ezPLM 器件库 · 真实接口** | ⬜ NOT RUN | 没有 API Key。`pnpm test:parts-real` 备好，见 [docs/11](docs/11-parts-database.md) §9 |
 
 逐步接上真实依赖的三条命令，缺依赖时都会 SKIPPED 而不是失败：
 

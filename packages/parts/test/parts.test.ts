@@ -173,23 +173,33 @@ describe('provider factory 与降级', () => {
     expect(info.reason).toMatch(/MOCK_MODE/)
   })
 
-  it('要 remote 但缺配置时降级并说明原因', () => {
+  it('要 remote 但没给 key 时降级并说明原因', () => {
+    // base URL 有默认值（手册写死了 www.ezplm.cn），所以只有 key 是必填
     const info = createPartsProvider({ PARTS_PROVIDER: 'remote' } as NodeJS.ProcessEnv)
     expect(info.provider.name).toBe('mock')
     expect(info.degraded).toBe(true)
-    expect(info.reason).toMatch(/PARTS_API_BASE_URL/)
+    expect(info.reason).toMatch(/PARTS_API_KEY/)
   })
 
-  it('配置齐全但参考文件未到位时，如实报 remote 不可用', () => {
-    // 不假装配置成功了：/health 要显示「请求的是 remote，但它用不了」
+  it('给了 key 就能用，但仍列出缺的接入信息', () => {
+    // 「能用」和「接入信息完整」是两件事，不该混成一个布尔：
+    // degraded=false（它确实在工作），missingSpec 非空（还缺字段字典与样例）
     const info = createPartsProvider({
       PARTS_PROVIDER: 'remote',
-      PARTS_API_BASE_URL: 'https://example.com',
       PARTS_API_KEY: 'k',
     } as NodeJS.ProcessEnv)
     expect(info.provider.name).toBe('remote')
-    expect(info.degraded).toBe(true)
+    expect(info.degraded).toBe(false)
     expect(info.missingSpec.length).toBeGreaterThan(0)
+    expect(info.missingSpec.join(' ')).toMatch(/samples|fields/)
+  })
+
+  it('不配 base URL 也能用：手册写死了 ezplm.cn', () => {
+    const info = createPartsProvider({
+      PARTS_PROVIDER: 'remote',
+      PARTS_API_KEY: 'k',
+    } as NodeJS.ProcessEnv)
+    expect(info.provider.name).toBe('remote')
   })
 })
 
@@ -289,17 +299,23 @@ describe('健康状态', () => {
     expect(h.missingSpec).toBeUndefined()
   })
 
-  it('remote 未接入时 degraded 并列出缺哪几项', async () => {
+  it('remote 可用时不 degraded，但仍报出缺的接入信息', async () => {
     const h = await new PartsService({
-      env: {
-        PARTS_PROVIDER: 'remote',
-        PARTS_API_BASE_URL: 'https://example.com',
-        PARTS_API_KEY: 'k',
-      } as NodeJS.ProcessEnv,
+      env: { PARTS_PROVIDER: 'remote', PARTS_API_KEY: 'k' } as NodeJS.ProcessEnv,
+    }).describe()
+    expect(h.provider).toBe('remote')
+    // 没发过请求就没有错误，degraded 应为 false —— 不能因为「信息不全」
+    // 就一直报降级，那样真降级时就没人看了
+    expect(h.degraded).toBe(false)
+    expect(h.missingSpec?.length).toBeGreaterThan(0)
+  })
+
+  it('没给 key 时降级，原因指向 PARTS_API_KEY', async () => {
+    const h = await new PartsService({
+      env: { PARTS_PROVIDER: 'remote' } as NodeJS.ProcessEnv,
     }).describe()
     expect(h.degraded).toBe(true)
-    expect(h.missingSpec?.length).toBeGreaterThan(0)
-    expect(h.lastError).toBeTruthy()
+    expect(h.lastError).toMatch(/PARTS_API_KEY/)
   })
 
   it('无请求时 mirrorHit 是 null 而不是 0', async () => {
