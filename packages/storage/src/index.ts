@@ -435,7 +435,12 @@ export function describeStorage(env: NodeJS.ProcessEnv = process.env): StorageSt
   const adapter = createStorage(env)
   const requested = env.STORAGE_ADAPTER ?? 'mock'
   const isProduction = env.NODE_ENV === 'production'
-  const allowMockInProduction = env.ALLOW_MOCK_STORAGE_IN_PRODUCTION === 'true'
+  // 大小写与首尾空格是纯粹的 UI 事故，不是意图上的歧义 —— 在 Railway 的
+  // 变量框里填 `TRUE` 或末尾多一个空格，本意毫无疑问。以前严格比字面量
+  // 'true'，这两种情况会被静默忽略，而报错信息**一模一样**，
+  // 人会坚信自己已经设过了。
+  const allowRaw = env.ALLOW_MOCK_STORAGE_IN_PRODUCTION
+  const allowMockInProduction = (allowRaw ?? '').trim().toLowerCase() === 'true'
   const fellBack = adapter.name === 'mock' && requested === 's3'
   const mockInProduction = adapter.name === 'mock' && isProduction
 
@@ -466,6 +471,15 @@ export function describeStorage(env: NodeJS.ProcessEnv = process.env): StorageSt
 export function assertStorageUsable(env: NodeJS.ProcessEnv = process.env): void {
   const s = describeStorage(env)
   if (!s.productionUnsafe) return
+
+  // 把**实际读到的值**打出来。「我明明设了」是这条守卫最常见的卡点，
+  // 而原因通常是设在了别的服务/别的环境、或者值写成了 `1`/`yes`。
+  // 不打出来的话，两种情况的报错完全一样，只能靠猜。
+  const seen = (name: string) => {
+    const v = env[name]
+    return v === undefined ? '(未设置)' : v === '' ? '(空字符串)' : JSON.stringify(v)
+  }
+
   throw new StorageError(
     [
       'NODE_ENV=production 时不允许使用 mock 对象存储。',
@@ -476,8 +490,18 @@ export function assertStorageUsable(env: NodeJS.ProcessEnv = process.env): void 
       '     S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY（R2、S3、MinIO 均可，见 docs/09）',
       '  2) 明知故犯（仅内置 Demo）：ALLOW_MOCK_STORAGE_IN_PRODUCTION=true',
       '',
-      '注意：api 与 worker 是两个独立服务，**两边都要设**。',
-      '只设一边的话，另一边会以完全相同的信息再崩一次。',
+      '注意：api 与 worker 是两个独立服务，**两边都要设**，',
+      '而且要设在当前这个环境（Railway 的变量是按 环境×服务 分开的）。',
+      '',
+      '本进程实际读到的值：',
+      `  NODE_ENV                          = ${seen('NODE_ENV')}`,
+      `  STORAGE_ADAPTER                   = ${seen('STORAGE_ADAPTER')}`,
+      `  ALLOW_MOCK_STORAGE_IN_PRODUCTION  = ${seen('ALLOW_MOCK_STORAGE_IN_PRODUCTION')}`,
+      `  S3_BUCKET                         = ${seen('S3_BUCKET')}`,
+      '',
+      '豁免开关只认 true（不区分大小写、忽略首尾空格）。上面若显示 "1" / "yes"',
+      '这类值，说明设了但没被认作开启 —— 改成 true 即可。',
+      '若显示 (未设置)，说明这个进程根本没读到它：多半设在了别的服务或别的环境。',
     ].join('\n'),
     'BACKEND',
   )

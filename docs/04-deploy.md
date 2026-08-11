@@ -104,6 +104,31 @@ ALLOW_MOCK_STORAGE_IN_PRODUCTION=true
 >
 > 正解是配 R2（见 `docs/09-storage-validation.md` §3），两边都加那组 `S3_*`。
 
+### 「我明明设了，还是 Crash」
+
+设完之后再崩，就看日志里这段 —— 报错会把进程**实际读到的值**打出来：
+
+```
+本进程实际读到的值：
+  NODE_ENV                          = "production"
+  STORAGE_ADAPTER                   = "mock"
+  ALLOW_MOCK_STORAGE_IN_PRODUCTION  = (未设置)
+  S3_BUCKET                         = (未设置)
+```
+
+| 日志里显示 | 说明 | 怎么修 |
+| --- | --- | --- |
+| `(未设置)` | 这个进程根本没读到 | 变量设在了另一个服务或另一个环境。Railway 的变量按 **环境 × 服务** 分开，`api` 上设的 `worker` 读不到 |
+| `"1"` / `"yes"` / `"on"` | 设了，但不认作开启 | 改成 `true`（大小写和首尾空格无所谓，`TRUE`、` true ` 都行） |
+| `"true"` 但仍崩 | 不是存储守卫的问题 | 往下翻日志找真正的异常，这条守卫不会在打印后继续执行 |
+
+改完变量 Railway 会自动重新部署。**在崩掉的部署上点 Restart 没用** ——
+它用的还是旧的变量快照；Activity 里要能看到一条新的 Deploy。
+
+2026-08-11 在本地按 Railway 的实际路径（`NODE_ENV=production` + 真实
+`REDIS_URL`）复现确认过：设了豁免 worker 正常连上 Redis 并开始监听，
+不设就以上面这条信息退出，和 Railway 的现象一致。
+
 验证真实存储：`pnpm test:storage-real`（本地 MinIO 一条命令起，见
 `docs/09-storage-validation.md`）。
 

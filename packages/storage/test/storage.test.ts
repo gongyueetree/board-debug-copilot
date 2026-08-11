@@ -172,10 +172,43 @@ describe('生产环境禁用 mock 存储', () => {
     expect(s.allowMockInProduction).toBe(true)
   })
 
-  it('豁免开关只认字面量 true', () => {
-    for (const v of ['1', 'yes', 'TRUE', '']) {
+  it('豁免开关容忍大小写与首尾空格', () => {
+    // 在 Railway 的变量框里填 TRUE 或末尾多一个空格，本意毫无疑问。
+    // 以前严格比字面量 'true'，这两种会被静默忽略，而报错信息一模一样 ——
+    // 人会坚信自己已经设过了。
+    for (const v of ['true', 'TRUE', 'True', ' true ', 'true\n']) {
       const env = { ...base, NODE_ENV: 'production', ALLOW_MOCK_STORAGE_IN_PRODUCTION: v }
-      expect(describeStorage(env).productionUnsafe).toBe(true)
+      expect(describeStorage(env).productionUnsafe, `值 ${JSON.stringify(v)}`).toBe(false)
+    }
+  })
+
+  it('但不认 1 / yes / 空 —— 那些是真有歧义的', () => {
+    for (const v of ['1', 'yes', 'on', '']) {
+      const env = { ...base, NODE_ENV: 'production', ALLOW_MOCK_STORAGE_IN_PRODUCTION: v }
+      expect(describeStorage(env).productionUnsafe, `值 ${JSON.stringify(v)}`).toBe(true)
+    }
+  })
+
+  it('报错时打出实际读到的值 —— 「我明明设了」要能一眼看出为什么没生效', () => {
+    const env = { ...base, NODE_ENV: 'production', ALLOW_MOCK_STORAGE_IN_PRODUCTION: '1' }
+    try {
+      assertStorageUsable(env)
+      throw new Error('应该抛出')
+    } catch (err) {
+      const msg = (err as Error).message
+      // 设成 1 时要看到它的字面值，而不是又一遍通用提示
+      expect(msg).toContain('ALLOW_MOCK_STORAGE_IN_PRODUCTION  = "1"')
+      expect(msg).toContain('NODE_ENV                          = "production"')
+      expect(msg).toContain('两边都要设')
+    }
+  })
+
+  it('完全没设时显示 (未设置)，与「设了但值不对」区分开', () => {
+    try {
+      assertStorageUsable({ ...base, NODE_ENV: 'production' })
+      throw new Error('应该抛出')
+    } catch (err) {
+      expect((err as Error).message).toContain('ALLOW_MOCK_STORAGE_IN_PRODUCTION  = (未设置)')
     }
   })
 
