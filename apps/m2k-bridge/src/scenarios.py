@@ -103,6 +103,11 @@ def measure(ch1: np.ndarray, ch2: np.ndarray, sample_rate: float) -> dict:
             "vpp": round(vmax - vmin, 4),
             "vrms": round(float(np.sqrt(np.mean(ac**2))), 4),
             "freqHz": round(_dominant_freq(x, sample_rate), 1),
+            # FFT 的频率分辨率 = 采样率 / 点数。测到的频率和它同量级时，
+            # 这个读数就是不可信的 —— 采样窗口短于一个周期时最典型：
+            # 512 点 @1MSPS 只有 0.5ms，测 1kHz 会得到 0 或 1953Hz。
+            # 报出来让调用方自己判断，比给一个看起来正常的数字安全。
+            "freqResolutionHz": round(sample_rate / max(len(x), 1), 1),
             "offsetV": round(dc, 4),
             "vmax": round(vmax, 4),
             "vmin": round(vmin, 4),
@@ -171,7 +176,11 @@ def _dominant_freq(x: np.ndarray, sample_rate: float) -> float:
     win = np.hanning(len(ac))
     spec = np.abs(np.fft.rfft(ac * win))
     freqs = np.fft.rfftfreq(len(ac), 1 / sample_rate)
-    return float(freqs[int(np.argmax(spec))])
+    # 跳过 bin 0：减完均值它本该是 0，但采样窗口不足一个周期时残留的直流
+    # 会让它成为最大值，于是「主频」被报成 0Hz —— 看起来像通道没信号。
+    if len(spec) > 1:
+        return float(freqs[1 + int(np.argmax(spec[1:]))])
+    return 0.0
 
 
 def _thdn_pct(x: np.ndarray, sample_rate: float) -> float:

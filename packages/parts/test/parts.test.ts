@@ -324,3 +324,36 @@ describe('健康状态', () => {
     expect(h.mirrorHit).toBeNull()
   })
 })
+
+describe('EZPLM_* 变量别名', () => {
+  // 手册与联调步骤用 EZPLM_*，adapter 层用 PARTS_*。两套都认，
+  // 否则「我设了 EZPLM_API_KEY 但什么都没发生」会白跑一轮联调。
+  it('EZPLM_API_KEY 等价于 PARTS_API_KEY', () => {
+    const info = createPartsProvider({
+      PARTS_PROVIDER: 'remote',
+      EZPLM_API_KEY: 'k',
+    } as NodeJS.ProcessEnv)
+    expect(info.provider.name).toBe('remote')
+    expect(info.degraded).toBe(false)
+  })
+
+  it('PARTS_* 优先于 EZPLM_*', () => {
+    const info = createPartsProvider({
+      PARTS_PROVIDER: 'remote',
+      PARTS_API_KEY: 'from-parts',
+      EZPLM_API_KEY: 'from-ezplm',
+    } as NodeJS.ProcessEnv)
+    expect(info.provider.name).toBe('remote')
+  })
+
+  it('设了 key 却没开 remote 时说出来', () => {
+    // 这是最容易白跑一轮的配置错误：一切正常，只是数据仍来自内置那 5 颗器件
+    const info = createPartsProvider({ EZPLM_API_KEY: 'k' } as NodeJS.ProcessEnv)
+    expect(info.provider.name).toBe('mock')
+    expect(info.reason).toMatch(/PARTS_PROVIDER 不是 remote/)
+  })
+
+  it('两个都没设时不报无谓的原因', () => {
+    expect(createPartsProvider({} as NodeJS.ProcessEnv).reason).toBeNull()
+  })
+})

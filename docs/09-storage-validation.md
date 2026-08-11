@@ -356,6 +356,22 @@ STORAGE_PRESIGN_CONTENT_LENGTH=lenient
 | 结果 | **未执行**：本机没有 R2 凭据 |
 | 下一步 | 按 §3 填 `.env.r2` 后跑 `pnpm test:storage-real`，七项全绿再改这一行 |
 
+### 跑失败时按这张表分类
+
+七项检查失败时，先判断是哪一类 —— 五类的修法完全不同，混在一起排查会绕远。
+
+| 现象 | 类别 | 说明与修法 |
+| --- | --- | --- |
+| 浏览器直传时预检 OPTIONS 被拦 | **CORS** | 只影响浏览器，`test:storage-real` 在 Node 里跑不会命中。按 §3 的 CORS 配 |
+| PUT 返回 403 `SignatureDoesNotMatch` | **content-length 签名** | R2 是否与 MinIO 一样严格校验签进签名的 content-length。若 R2 放行，第 6 项「多传一字节被拒」会失败 —— 那不是代码坏了，是这条防线在 R2 上不成立，按 §6 走 lenient |
+| 所有请求 404，路径里带着桶名 | **path-style** | `S3_FORCE_PATH_STYLE` 必须是 `true`。R2 不支持 virtual-host style |
+| 签名 URL 取对象 401/403 | **signed read** | 检查 `S3_REGION=auto`（R2 不认真实区域名），以及 API Token 权限是否含 Object Read |
+| `head` 返回 null 但对象确实存在 | **HEAD 行为** | 权限里缺 HeadObject，或 R2 对 HEAD 的响应头与 S3 不同。`S3Storage.head` 把 404 与权限错误都吞成 null —— 这时要临时打开日志看真实状态码 |
+| `delete` 之后 `head` 仍有结果 | **最终一致性** | R2 的删除是强一致的，若真出现要记下来，可能需要在 `delete` 后加一次确认 |
+| 全部超时 | **端点/网络** | 确认 `S3_ENDPOINT` 里的 account-id 正确 |
+
+**把命中的类别记进 §8 的记录表**，不要只写「失败了」。
+
 要特别留意的两点（MinIO 上验不出来）：
 
 1. **content-length 签名**：R2 是否与 MinIO 一样严格校验。若 R2 放行了

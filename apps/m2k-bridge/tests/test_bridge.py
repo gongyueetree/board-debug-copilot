@@ -430,12 +430,180 @@ def test_phase_is_zero_when_ch2_has_no_signal():
     assert measure(ref, flat, fs)["phaseDeg"] == 0.0
 
 
-def test_measure_reports_requested_samples_when_ignored():
-    """mock 固定 2048 点会忽略请求值 —— 差异必须可见。
+@pytest.mark.parametrize("n", [512, 2048, 4096, 16384])
+def test_measure_honours_requested_samples(n):
+    """两个 adapter 的签名统一之后，请求多少点就该采多少点。
 
-    不写出来的话，调用方会以为自己拿到的是 4096 点的频率分辨率。
+    以前 main.py 靠 inspect 判断 adapter 支不支持 samples，mock 那条路
+    直接忽略请求值 —— 调用方会以为自己拿到了 4096 点的频率分辨率。
     """
-    res = client.post("/scope/measure", json={"samples": 4096}, headers=auth(pair()))
+    res = client.post("/scope/measure", json={"samples": n}, headers=auth(pair()))
     body = res.json()
-    assert body["requestedSamples"] == 4096
-    assert body["samples"] == 2048
+    assert body["requestedSamples"] == n
+    assert body["samples"] == n
+
+
+def test_measure_reports_requested_and_actual_separately():
+    """两个字段都要在。相等是正常情况，不相等说明 adapter 没按请求采 ——
+    那正是需要被看见的。"""
+    body = client.post("/scope/measure", json={"samples": 1024}, headers=auth(pair())).json()
+    assert {"samples", "requestedSamples"} <= body.keys()
+
+
+def test_measure_rejects_out_of_range_samples():
+    """点数有上下界：太少算不出频率，太多一次采集会卡住。"""
+    token = pair()
+    for n in (32, 131072):
+        res = client.post("/scope/measure", json={"samples": n}, headers=auth(token))
+        assert res.status_code == 422, f"samples={n} 应被拒绝"
+
+
+def test_websocket_stream_still_uses_default_samples():
+    """WS 流不传 samples，走默认值 —— 统一签名不能把流打断。
+
+    帧里的点数是 DEFAULT_SAMPLES / DISPLAY_STRIDE：波形是给屏幕看的，
+    2048 点抽到 512 已经超过一般画布的水平像素数，全量传只是浪费带宽。
+    要全分辨率的数据走 /scope/measure。
+    """
+    import json
+
+    from src.adapters.base import DEFAULT_SAMPLES
+    from src.protocol import DISPLAY_STRIDE
+
+    token = pair()
+    with client.websocket_connect(f"/ws?token={token}") as ws:
+        for _ in range(4):
+            msg = json.loads(ws.receive_text())
+            if msg["type"] == "waveform":
+                assert len(msg["ch1"]) == DEFAULT_SAMPLES // DISPLAY_STRIDE
+                return
+    raise AssertionError("没有收到 waveform 帧")
+
+
+def test_all_adapters_share_the_same_signature():
+    """base / mock / real 三处签名必须一致。
+
+    不一致的话 main.py 就得靠 inspect 去猜，而猜错的表现是「请求被静默忽略」。
+    """
+    import inspect
+
+    from src.adapters.base import DEFAULT_SAMPLES
+    from src.adapters.mock_m2k import MockM2kAdapter
+    from src.adapters.real_m2k import RealM2kAdapter
+
+    for cls in (MockM2kAdapter, RealM2kAdapter):
+        sig = inspect.signature(cls.read_scope_frame)
+        assert list(sig.parameters) == ["self", "sequence", "samples"], cls.__name__
+        assert sig.parameters["samples"].default == DEFAULT_SAMPLES, cls.__name__
+
+
+def test_dominant_freq_never_reports_zero_for_a_live_signal():
+    """采样窗口不足一个周期时，主频不能报成 0Hz。
+
+    减完均值后 bin 0 本该是 0，但窗口太短时残留直流会让它成为最大值 ——
+    结果是有信号的通道被报成 0Hz，看起来像通道断了。
+    """
+    import numpy as np
+
+    from src.scenarios import measure
+
+    fs = 1_000_000.0
+    for n in (256, 512, 1024, 2048):
+        t = np.arange(n) / fs
+        sig = 0.2 * np.sin(2 * np.pi * 1000 * t)
+        m = measure(sig, sig, fs)["ch1"]
+        assert m["freqHz"] > 0.0, f"{n} 点时报了 {m['freqHz']}Hz"
+
+
+def test_measurements_report_frequency_resolution():
+    """频率分辨率要报出来：测到的频率和它同量级时读数不可信。"""
+    import numpy as np
+
+    from src.scenarios import measure
+
+    fs = 1_000_000.0
+    t = np.arange(512) / fs
+    sig = 0.2 * np.sin(2 * np.pi * 1000 * t)
+    m = measure(sig, sig, fs)["ch1"]
+    # 512 点 @1MSPS → 分辨率约 1953Hz，比要测的 1kHz 还大
+    assert m["freqResolutionHz"] == pytest.approx(fs / 512, rel=0.01)
+    assert m["freqResolutionHz"] > 1000.0
+
+    t = np.arange(8192) / fs
+    sig = 0.2 * np.sin(2 * np.pi * 1000 * t)
+    m = measure(sig, sig, fs)["ch1"]
+    assert m["freqResolutionHz"] < 200.0
+    assert m["freqHz"] == pytest.approx(1000.0, rel=0.05)
+
+
+def test_mock_awg_returns_same_shape_as_real():
+    """两个 adapter 的 configure_awg 返回同一形状。
+
+    形状不一致的话，hardware_smoke 这类工具就得为每个 adapter 写分支，
+    而分支写漏的表现是「mock 上看着好好的，真机上少了几个字段」。
+    """
+    from src.adapters import AwgConfig
+    from src.adapters.mock_m2k import MockM2kAdapter
+
+    got = MockM2kAdapter().configure_awg(AwgConfig(wave="sine", freq_hz=1000.0))
+    for key in ("applied", "channel", "wave", "amplitudeVpp", "offsetV",
+                "requestedFreqHz", "actualFreqHz", "freqErrorPct"):
+        assert key in got, f"缺字段 {key}"
+
+
+def test_mock_awg_does_not_lie_about_frequency():
+    """形状一致 ≠ 内容可以造假。
+
+    mock 是场景回放，波形固定 1kHz。请求 5kHz 时如实报 1000 与 400% 误差，
+    而不是把请求值抄回去 —— 那样 mock 上永远「频率正确」，真机上才发现不对。
+    """
+    from src.adapters import AwgConfig
+    from src.adapters.mock_m2k import MockM2kAdapter
+
+    a = MockM2kAdapter()
+    at_1k = a.configure_awg(AwgConfig(wave="sine", freq_hz=1000.0))
+    assert at_1k["actualFreqHz"] == 1000.0
+    assert at_1k["freqErrorPct"] == 0.0
+
+    at_5k = a.configure_awg(AwgConfig(wave="sine", freq_hz=5000.0))
+    assert at_5k["actualFreqHz"] == 1000.0
+    # 误差相对请求值算：|1000-5000|/5000 = 80%
+    assert at_5k["freqErrorPct"] == pytest.approx(80.0)
+    assert at_5k["simulated"] is True
+
+
+def test_mock_awg_rejects_unknown_waveform_like_real():
+    from src.adapters import AdapterError, AwgConfig
+    from src.adapters.mock_m2k import MockM2kAdapter
+
+    with pytest.raises(AdapterError) as exc:
+        MockM2kAdapter().configure_awg(AwgConfig(wave="noise"))
+    assert exc.value.code == "WAVEFORM_UNSUPPORTED"
+
+
+@pytest.mark.parametrize("freq,code", [(25_000_000.0, "FREQ_UNREACHABLE"), (50_000_000.0, "LIMIT_EXCEEDED")])
+def test_both_adapters_reject_the_same_frequencies(freq, code):
+    """两个 adapter 的拒绝行为必须一致。
+
+    mock 上能配成、真机上配不成的话，人会在 mock 上试通之后接硬件，
+    然后把「频率做不到」误判成硬件问题。
+    """
+    from src.adapters import AdapterError, AwgConfig
+    from src.adapters.mock_m2k import MockM2kAdapter
+    from src.adapters.real_m2k import RealM2kAdapter
+
+    for adapter in (MockM2kAdapter(), RealM2kAdapter()):
+        with pytest.raises(AdapterError) as exc:
+            adapter.configure_awg(AwgConfig(wave="sine", freq_hz=freq, amplitude_vpp=0.4))
+        assert exc.value.code == code, f"{type(adapter).__name__} 报了 {exc.value.code}"
+
+
+def test_demo_frequencies_still_accepted_by_mock():
+    """内置 Demo 用的频率不能被新校验挡掉 —— 回归底线。"""
+    from src.adapters import AwgConfig
+    from src.adapters.mock_m2k import MockM2kAdapter
+
+    a = MockM2kAdapter()
+    for freq in (1000.0, 10_000.0):
+        assert a.configure_awg(AwgConfig(wave="sine", freq_hz=freq))["applied"] is True
+    assert a.configure_awg(AwgConfig(wave="dc", freq_hz=0.0, offset_v=2.5))["applied"] is True

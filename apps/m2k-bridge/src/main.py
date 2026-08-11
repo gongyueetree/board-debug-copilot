@@ -308,28 +308,18 @@ def measure_once(
     """
     body = req or MeasureRequest()
     try:
-        frame = adapter.read_scope_frame(0, samples=body.samples) if _accepts_samples() else adapter.read_scope_frame(0)
+        frame = adapter.read_scope_frame(0, samples=body.samples)
     except AdapterError as exc:
         raise _adapter_error(exc) from exc
 
     return {
         "sampleRate": frame.sample_rate,
         "samples": int(len(frame.ch1)),
-        # 请求值也报出来：mock adapter 固定 2048 点，忽略了请求。
-        # 不写出来的话，调用方会以为自己拿到的是 4096 点的频率分辨率。
+        # 请求值也报出来。现在两个 adapter 都支持 samples，正常应该相等；
+        # 不相等就说明 adapter 没按请求采，那是需要被看见的。
         "requestedSamples": body.samples,
         "measurements": frame.measurements,
     }
-
-
-def _accepts_samples() -> bool:
-    """mock adapter 的 read_scope_frame 没有 samples 参数，真实的有。"""
-    import inspect
-
-    try:
-        return "samples" in inspect.signature(adapter.read_scope_frame).parameters
-    except (TypeError, ValueError):  # pragma: no cover
-        return False
 
 
 @app.get("/diagnostics")

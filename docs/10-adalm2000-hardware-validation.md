@@ -91,6 +91,62 @@ BRIDGE_MOCK=false .venv/bin/uvicorn src.main:app --host 127.0.0.1 --port 3777
 
 ---
 
+## 1.5 重点验证项（先看这三条）
+
+这三条是**我们对 libm2k 的假设**，写代码时无法确认，错了会让后面所有读数都不可信。
+拿到硬件先验它们。
+
+### 1.5.1 `aout.setCyclic` 的真实签名
+
+代码里是 `self._aout.setCyclic(True)`，包在 `_try()` 里 —— 不同 libm2k 版本
+可能需要通道参数（`setCyclic(chn, True)`），也可能根本没有这个方法。
+
+**为什么要紧**：不设循环的话，AWG 把缓冲播完就停，输出变成**一个脉冲**而不是
+连续波形。示波器上看到的是一条直线，很容易被当成「没有输出」。
+
+| 检查 | 怎么做 | 记录 |
+| --- | --- | --- |
+| 方法是否存在 | `python -c "import libm2k; print([m for m in dir(libm2k.M2kAnalogOut) if 'yclic' in m])"` | ☐ |
+| 签名要不要通道参数 | `help(libm2k.M2kAnalogOut.setCyclic)` | ☐ |
+| `/diagnostics` 里显示什么 | 找 `aout.setCyclic` 那行是 `[OK ]` 还是 `[SKIP]` | ☐ |
+| `[SKIP]` 时输出是什么样 | 示波器上看是连续波形还是单个脉冲 | ☐ |
+
+若是 `[SKIP]` 且输出只有一个脉冲，把正确签名填进
+`real_m2k.py` 的 `configure_awg`（那一行改掉即可，其余不动）。
+
+### 1.5.2 `getAvailableSampleRates` 的真实返回
+
+`awg_plan.py` 里有两张默认表，连接时会尝试用设备实际返回的表覆盖它们。
+**如果实际表与默认表不同，所有频率规划都会偏。**
+
+```bash
+curl -s http://127.0.0.1:3777/diagnostics -H "authorization: Bearer $TOKEN" \
+  | python3 -m json.tool | grep -A 12 AvailableRates
+```
+
+| 项 | 代码里的默认值 | 设备实际返回 | 一致？ |
+| --- | --- | --- | --- |
+| AWG（`aout`） | `750, 7500, 75000, 750000, 7500000, 75000000` | | ☐ |
+| Scope（`ain`） | `1000, 10000, 100000, 1000000, 10000000, 100000000` | | ☐ |
+| `aout.getAvailableSampleRates` 是否需要通道参数 | 代码传了 `0` | | ☐ |
+
+不一致就把实际表填进 `awg_plan.py` 的 `DEFAULT_AWG_RATES` / `DEFAULT_SCOPE_RATES`
+（作为兜底），并确认 `/diagnostics` 里那两行是 `[OK ]`。
+
+### 1.5.3 `getSamples` 的返回形状与量纲
+
+`_unpack()` 支持三种形状（两个列表 / 列优先 / 交织），判不出来会报错并打印
+实际 shape。**拆错的表现是「波形看起来像噪声」**，很容易被当成硬件问题。
+
+| 检查 | 期望 | 实测 | ☐ |
+| --- | --- | --- | --- |
+| 返回类型 | list / ndarray | | ☐ |
+| shape | `(2, N)` | | ☐ |
+| `/diagnostics` 里有没有 `已转置` / `已解交织` 的 note | 没有 | | ☐ |
+| 量纲 | 伏特（接 3.3V 稳压读到 ≈3.3） | | ☐ |
+
+---
+
 ## 2. 设备发现
 
 ### `GET /status`
@@ -170,7 +226,29 @@ curl -s -X POST -H "authorization: Bearer $TOKEN" http://127.0.0.1:3777/devices/
 
 5. **W1 → CH1 loopback**：见第 4 节，做完 AWG 再回来做。
 
-**记录**：空载 Vpp、通道顺序是否正确、单位是否为伏特、实际采样率。
+**Scope 测量验证矩阵**
+
+| # | 项 | 怎么验 | 期望 | 实测 | ☐ |
+| --- | --- | --- | --- | --- | --- |
+| 1 | CH1/CH2 通道顺序 | 只把信号接到 CH1 | `ch1` 有信号、`ch2` 接近 0 | | ☐ |
+| 2 | `getSamples` 单位 | 接已知 3.3V 稳压输出 | 读数 ≈ 3.3（不是 3300 / 0.0033） | | ☐ |
+| 3 | 1MSPS 可用 | `POST /scope {"sampleRate":1000000}` | 返回的 `sampleRate` = 1000000 | | ☐ |
+| 4 | 10MSPS 可用 | 同上换 10000000 | 返回 10000000 | | ☐ |
+| 5 | 空载噪声 | 探头悬空，`POST /scope/measure` | Vpp 在**几个 mV** 量级 | | ☐ |
+| 6 | W1→CH1 loopback | 见第 6 节脚本 | 测到的 Vpp/频率 ≈ 请求值 | | ☐ |
+| 7 | 双通道相位一致 | W1 同时接 CH1 与 CH2 | `phaseDeg` ≈ 0 | | ☐ |
+
+第 5 项若是几百 mV 或上千，**多半是量纲错了（原始 ADC 码没转成电压），
+不是硬件坏了**。
+
+第 7 项是通道间偏斜的检查：同一个信号分给两个通道，相位差应该接近 0。
+差得多说明两个通道不是同时采样的，那会让所有增益/相位测量失真。
+
+一次采集的点数会影响频率读数的可信度：`measurements.ch1.freqResolutionHz`
+是 `采样率 / 点数`，测到的频率和它同量级时读数不可信。1MSPS 下测 1kHz
+至少要 8192 点（分辨率 122Hz）。
+
+**记录**：上表 + 实际采样率。
 
 ---
 
@@ -213,18 +291,46 @@ curl -s -X POST -H "authorization: Bearer $TOKEN" http://127.0.0.1:3777/devices/
 
 4. **频率是否真的生效**（这一版的重点）
 
+   拒绝行为（不用接示波器就能验）：
+
    | 请求 freqHz | 预期 |
    | --- | --- |
-   | 1000 | `actualFreqHz` = 1000，`freqErrorPct` = 0 |
-   | 1200 | 1200，误差 0 |
-   | 100000 | 100000，误差 0 |
-   | 10000000 | 10000000，误差 0（靠 4 周期缓冲） |
    | 25000000 | **503 `FREQ_UNREACHABLE`**，规格内但 75MSPS 合成不出可用波形 |
    | 50000000 | **422 `LIMIT_EXCEEDED`**，超器件绝对规格 |
 
-   **每一条都要用独立示波器量实际输出频率并记进第 7 节。**
-   返回体里的 `sampleRate` / `samples` / `cycles` 是我们算出来的计划，
-   实测和它对不上就说明 libm2k 那一层的理解有误。
+   **AWG 输出验证矩阵** —— 每一行都要用独立示波器量。
+   `actualFreqHz` 是我们算出来的，实测和它对不上就说明对 libm2k 的理解有误。
+
+   | # | 请求 | `actualFreqHz` | 示波器实测频率 | 实测 Vpp | 实测 offset | 稳定循环 | 有无毛刺 |
+   | --- | --- | --- | --- | --- | --- | --- | --- |
+   | 1 | sine 1Hz 0.4Vpp | | | | | ☐ | ☐ |
+   | 2 | sine 10Hz 0.4Vpp | | | | | ☐ | ☐ |
+   | 3 | sine 1kHz 0.4Vpp | | | | | ☐ | ☐ |
+   | 4 | sine 100kHz 0.4Vpp | | | | | ☐ | ☐ |
+   | 5 | sine 1MHz 0.4Vpp | | | | | ☐ | ☐ |
+   | 6 | square 1kHz 0.4Vpp | | | | | ☐ | ☐ |
+   | 7 | triangle 1kHz 0.4Vpp | | | | | ☐ | ☐ |
+   | 8 | sawtooth 1kHz 0.4Vpp | | | | | ☐ | ☐ |
+   | 9 | dc offset 0V | — | — | | | — | — |
+   | 10 | dc offset 1V | — | — | | | — | — |
+   | 11 | dc offset 2.5V（需 confirm） | — | — | | | — | — |
+
+   低频那两行（1Hz / 10Hz）特别重要：它们用的采样率档位（750 / 7500）和
+   1kHz 以上完全不同，档位选错在高频看不出来。
+
+   「稳定循环」指连续观察十几秒波形不漂移、不中断 —— `setCyclic` 没生效的话
+   这里会露馅（见 §1.5.1）。
+
+   「有无毛刺」看每个周期的接缝处：缓冲首尾接不上会出现周期性的尖峰。
+   锯齿的回扫沿是波形本身，不算毛刺。
+
+   请求命令：
+
+   ```bash
+   curl -s -X POST -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     -d '{"channel":"W1","wave":"sine","freqHz":1,"amplitudeVpp":0.4,"offsetV":0}' \
+     http://127.0.0.1:3777/awg | python3 -m json.tool
+   ```
 
 5. **幅度与偏置上限**
 
@@ -436,9 +542,19 @@ ADALM2000 固件版本：
 
 ### 能不能把 hardwareVerified 改成 true
 
-**全部打勾，并且第 4 节的 `freqHz` 问题已经修掉**之后才可以。
-只是「跑起来了」不够 —— 当前实现明确知道输出频率是错的，
-在那之上宣称已验证，等于把一个已知错误标成正确。
+必须同时满足：
+
+1. **§1.5 三条重点项全部确认**（`setCyclic` 签名、采样率表、`getSamples` 形状与量纲）
+2. **§4 的 AWG 矩阵 11 行全部实测填完**，实测频率与 `actualFreqHz` 一致
+3. **§3 的 Scope 矩阵 7 行全部实测填完**
+4. §5 的安全项全过
+5. 上面的记录表全部打勾
+
+`freqHz` 的实现问题在 2026-08-10 那一版已经修掉（现在按采样率与缓冲长度规划，
+1Hz~10MHz 数学上精确），但**数学正确不等于硬件正确** —— libm2k 那一层的
+理解对不对，只有 §4 的矩阵能回答。
+
+只是「跑起来了」不够。
 
 改的地方：`apps/m2k-bridge/src/adapters/real_m2k.py` 里三处 `status()` 的
 `hardware_verified` / `experimental`，以及

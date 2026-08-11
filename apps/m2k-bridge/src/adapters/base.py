@@ -16,6 +16,11 @@ Scenario = Literal["normal", "gain_error", "clipping", "noisy", "no_response"]
 
 # ADALM2000 hard limits. Exceeding these is rejected outright - confirm cannot
 # override them, because they are the hardware's limits, not a UI preference.
+#: 一帧默认采多少点。1MSPS 下 2048 点是 2ms，够看两个 1kHz 周期。
+#: 定义在 base 而不是各 adapter 里：两边取不同的默认值会让同一个请求
+#: 在 mock 与真机上得到不同的频率分辨率，而这种差异很难被发现。
+DEFAULT_SAMPLES = 2048
+
 AWG_MAX_VPP = 10.0
 AWG_MAX_OFFSET = 5.0
 AWG_MAX_FREQ = 30_000_000.0
@@ -92,7 +97,7 @@ class InstrumentAdapter(Protocol):
 
     def configure_scope(self, config: ScopeConfig) -> dict: ...
 
-    def read_scope_frame(self, sequence: int) -> ScopeFrame: ...
+    def read_scope_frame(self, sequence: int, samples: int = DEFAULT_SAMPLES) -> ScopeFrame: ...
 
     def emergency_stop(self) -> None: ...
 

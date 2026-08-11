@@ -154,6 +154,34 @@ def check_token(b: Bridge) -> Check:
     return Check("配对 token 有效", True, f"HTTP {status}")
 
 
+def fetch_diagnostics(b: Bridge) -> dict | None:
+    """取一次 /diagnostics。取不到就返回 None，不让它影响主流程。"""
+    try:
+        status, body = b.request("GET", "/diagnostics")
+        return body if status == 200 and isinstance(body, dict) else {"httpStatus": status, "body": body}
+    except ConnectionError:
+        return None
+
+
+def check_libm2k_present(b: Bridge, status_body: dict) -> Check:
+    """libm2k 没装时错误必须是 LIBM2K_MISSING，不能表现成「没有设备」。
+
+    「没有设备」会把人引去查 USB 线、查 Scopy 占用，而真正的原因是库没装。
+    """
+    status, payload = b.request("GET", "/devices")
+    code = code_of(payload)
+    if code == "LIBM2K_MISSING":
+        return Check(
+            "libm2k 已安装",
+            False,
+            "LIBM2K_MISSING —— 库没装，不是设备问题。安装步骤见 docs/10 §1",
+        )
+    detail = status_body.get("detail") or ""
+    if "libm2k 未安装" in str(detail):
+        return Check("libm2k 已安装", False, f"/status 报告：{detail}")
+    return Check("libm2k 已安装", True, f"/devices HTTP {status}")
+
+
 def check_devices(b: Bridge) -> tuple[Check, list]:
     status, body = b.request("GET", "/devices")
     if status != 200 or not isinstance(body, dict):
@@ -275,7 +303,7 @@ def check_limit_guards(b: Bridge) -> list[Check]:
     return out
 
 
-def check_loopback(b: Bridge) -> list[Check]:
+def check_loopback(b: Bridge, sink: dict) -> list[Check]:
     """W1 → CH1 直连，**采一帧回来对比**。这才是「数据通道通了没有」的答案。
 
     只请求 0.4Vpp / 0 offset，和内置 Demo 的默认值一致。结束后一定 disable。
@@ -288,6 +316,7 @@ def check_loopback(b: Bridge) -> list[Check]:
         "/awg",
         {"channel": "W1", "wave": "sine", "freqHz": freq, "amplitudeVpp": vpp, "offsetV": 0},
     )
+    sink["awgApplied"] = awg if isinstance(awg, dict) else {"httpStatus": status, "body": awg}
     ok = status == 200 and isinstance(awg, dict)
     out.append(
         Check(
@@ -300,11 +329,15 @@ def check_loopback(b: Bridge) -> list[Check]:
         return out
 
     try:
-        status, _ = b.request("POST", "/scope", {"sampleRate": 1_000_000, "running": True})
-        out.append(Check("启动示波器", status == 200, f"HTTP {status}"))
+        status, scope = b.request("POST", "/scope", {"sampleRate": 1_000_000, "running": True})
+        sink["scopeApplied"] = scope if isinstance(scope, dict) else {"httpStatus": status, "body": scope}
+        out.append(Check("启动示波器 1MSPS", status == 200, f"HTTP {status}"))
         time.sleep(0.5)
 
-        status, body = b.request("POST", "/scope/measure", {"samples": 4096})
+        # 8192 点 @1MSPS = 8ms，够 8 个 1kHz 周期，频率分辨率 122Hz。
+        # 点数太少会让 freqHz 变得不可信（见 measurements.freqResolutionHz）。
+        status, body = b.request("POST", "/scope/measure", {"samples": 8192})
+        sink["measureResult"] = body if isinstance(body, dict) else {"httpStatus": status, "body": body}
         if status != 200 or not isinstance(body, dict):
             out.append(Check("采集一帧", False, f"HTTP {status} {body}"))
             return out
@@ -314,8 +347,22 @@ def check_loopback(b: Bridge) -> list[Check]:
         got_vpp = float(c1.get("vpp", 0) or 0)
         got_freq = float(c1.get("freqHz", 0) or 0)
 
+        res_hz = float(c1.get("freqResolutionHz", 0) or 0)
         out.append(
-            Check("采集一帧", True, f"{body.get('samples')} 点 @ {body.get('sampleRate')}Sa/s")
+            Check(
+                "采集一帧",
+                True,
+                f"{body.get('samples')} 点 @ {body.get('sampleRate')}Sa/s，频率分辨率 {res_hz}Hz",
+            )
+        )
+        # 分辨率和待测频率同量级时，频率读数本身就不可信 —— 先说清楚，
+        # 免得把「窗口太短」误判成「频率不对」
+        out.append(
+            Check(
+                "采样窗口足够分辨 1kHz",
+                res_hz > 0 and res_hz < freq / 4,
+                f"分辨率 {res_hz}Hz（应远小于 {freq}Hz）",
+            )
         )
         # ±20% 是宽松的：探头衰减、量程档位、接触电阻都会影响幅度。
         # 这一步要回答的是「通道通不通」，精确标定是人工那一步的事。
@@ -345,6 +392,18 @@ def check_loopback(b: Bridge) -> list[Check]:
     return out
 
 
+#: 脚本量不了、必须人工填的项。放进报告里，免得被当成「全都验过了」。
+CHECKLIST_HINTS = [
+    "CH1/CH2 通道顺序：只接 CH1，确认动的是 ch1 那条曲线（docs/10 §3.3）",
+    "getSamples 单位：接已知直流电平，确认读数是伏特而不是 ADC 码（§3.4）",
+    "空载噪声：探头悬空，Vpp 应在几个 mV 量级；几百 mV 说明量纲错了（§3.2）",
+    "AWG 实测频率：用独立示波器量，与 actualFreqHz 对照填进 §7 的矩阵（§4）",
+    "波形形状：square/triangle/sawtooth 要真的是那个形状，不能都像正弦（§4.3）",
+    "setCyclic：若 diagnostics 里是 [SKIP]，AWG 可能只输出一次缓冲（§2.1）",
+    "拔 USB 后输出停止、Bridge 不崩（§5）",
+]
+
+
 # ---------------------------------------------------------------- main
 
 
@@ -365,6 +424,9 @@ def main() -> int:
     bridge = Bridge(args.base, args.token)
     checks: list[Check] = []
     status_body: dict = {}
+    sink: dict = {}
+    diag_before: dict | None = None
+    diag_after: dict | None = None
 
     print(f"ADALM2000 硬件冒烟检查\n  Bridge {args.base}\n")
 
@@ -380,6 +442,10 @@ def main() -> int:
             print("  ! 没给 --token，跳过所有需要配对的检查")
             print("    先 POST /pairing/start，看 Bridge 控制台的 6 位码，再 POST /pairing/verify\n")
         else:
+            # 连接前先拍一张：对照连接后的 notes，能看出 connect 里
+            # 哪些可选调用成了、哪些没成
+            diag_before = fetch_diagnostics(bridge)
+
             tok = check_token(bridge)
             checks.append(tok)
             if not tok.ok:
@@ -388,6 +454,7 @@ def main() -> int:
                 print("\n配对失败，后续硬件检查全部跳过。")
                 return 1
 
+            checks.append(check_libm2k_present(bridge, status_body))
             c, devices = check_devices(bridge)
             checks.append(c)
             if devices:
@@ -398,9 +465,10 @@ def main() -> int:
                 if args.loopback:
                     print("\n  !! W1 会真实输出 0.4Vpp。确认 W1 已直连 CH1，且没接被测板卡。")
                     if input("  !! 输入 yes 继续：").strip().lower() == "yes":
-                        checks.extend(check_loopback(bridge))
+                        checks.extend(check_loopback(bridge, sink))
                     else:
                         print("  已跳过 loopback")
+                diag_after = fetch_diagnostics(bridge)
             else:
                 print("  ! 没发现设备，跳过后续硬件检查")
     except ConnectionError as exc:
@@ -417,20 +485,23 @@ def main() -> int:
     failed = [c for c in checks if not c.ok]
     print(f"\n{len(checks) - len(failed)}/{len(checks)} 通过")
 
-    diag = None
-    if args.token:
-        try:
-            _, diag = bridge.request("GET", "/diagnostics")
-        except ConnectionError:
-            diag = None
+    if args.token and diag_after is None:
+        diag_after = fetch_diagnostics(bridge)
 
     if args.report:
         report = {
             "base": args.base,
-            "status": status_body,
-            # 每个可选 libm2k 调用的成败都在这里 —— 真机排查最有用的一列
-            "diagnostics": diag,
             "loopback": args.loopback,
+            "status": status_body,
+            # 连接前后各一张：对比两者的 notes 就能看出 connect 里
+            # 哪些可选 libm2k 调用成了、哪些没成
+            "diagnosticsBefore": diag_before,
+            "diagnosticsAfter": diag_after,
+            "awgApplied": sink.get("awgApplied"),
+            "scopeApplied": sink.get("scopeApplied"),
+            "measureResult": sink.get("measureResult"),
+            # 脚本量不了的项。放进来免得这份报告被当成「全都验过了」
+            "checklistHints": CHECKLIST_HINTS,
             "checks": [{"name": c.name, "ok": c.ok, "detail": c.detail} for c in checks],
             "passed": len(checks) - len(failed),
             "total": len(checks),
@@ -439,9 +510,10 @@ def main() -> int:
             json.dump(report, fh, ensure_ascii=False, indent=2)
         print(f"报告已写入 {args.report}")
 
-    print("\n注意：示波器读数、实际输出频率、通道顺序、单位这几项脚本量不了，")
-    print("      必须人工用独立示波器核对并填进 docs/10 第 7 节。")
-    print("      整份 checklist 走完之前，hardwareVerified 保持 false。")
+    print("\n脚本量不了、必须人工做的：")
+    for hint in CHECKLIST_HINTS:
+        print(f"  · {hint}")
+    print("\n整份 checklist 走完并填进 docs/10 §7 之前，hardwareVerified 保持 false。")
 
     return 1 if failed else 0
 

@@ -42,6 +42,7 @@ from .awg_plan import (
     synthesize_wave,
 )
 from .base import (
+    DEFAULT_SAMPLES,
     AdapterError,
     AwgConfig,
     DeviceStatus,
@@ -56,10 +57,6 @@ try:
 except ImportError as exc:  # pragma: no cover - depends on host
     libm2k = None  # type: ignore
     _IMPORT_ERROR = str(exc)
-
-#: 默认采集点数。2048 点在 1MSPS 下是 2ms，够看两个 1kHz 周期。
-DEFAULT_SAMPLES = 2048
-
 
 class RealM2kAdapter:
     name = "real"

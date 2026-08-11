@@ -12,15 +12,16 @@ AI 智能体综合**设计上下文 + 元器件知识 + 测量数据 + 视觉信
 | 链路 | 状态 | 依据 |
 | --- | --- | --- |
 | Mock Demo（6 个页面 + 智能体） | ✅ VERIFIED | CI `集成` job：`pnpm smoke` 33/33、`pnpm test:agent` 12/12 |
-| 单元测试 | ✅ VERIFIED | CI `类型/构建/单元测试` job：`pnpm test` 122 项 |
+| 单元测试 | ✅ VERIFIED | CI `类型/构建/单元测试` job：`pnpm test` 209 项 + Bridge pytest 82 项 |
 | MinIO 对象存储 | ✅ VERIFIED | CI `存储（MinIO 端到端）` job：`pnpm test:storage-real` 7/7 |
 | **KiCad CLI 解析（10.0.1 / macOS）** | ✅ **VERIFIED** | `pnpm test:kicad-real` 4/4 真实工程，2026-08-09，详见 [docs/08](docs/08-real-kicad-validation.md) §4 |
 | KiCad CLI 其它版本（6/7/8/9）与 Linux/Windows | ⬜ NOT RUN | 装好对应版本后跑 `pnpm test:kicad-real`，结果填 docs/08 §4 |
 | Cloudflare R2 | ⬜ NOT RUN | `cp .env.r2.example .env.r2` 填好后跑 `pnpm test:storage-real`，见 [docs/09](docs/09-storage-validation.md) §3 |
 | AWS S3 | ⬜ NOT RUN | 同上，配置见 [docs/09](docs/09-storage-validation.md) §4 |
 | **浏览器直传**到真实对象存储 | ⬜ NOT RUN | `pnpm test:storage-real` 在 Node 里跑，不经过 CORS。见 [docs/09](docs/09-storage-validation.md) §6 |
-| ADALM2000 Mock Bridge | ✅ VERIFIED | CI `Bridge (pytest)` job：24 项 + 冒烟里的危险操作拦截 |
-| **ADALM2000 真实硬件** | ⚠️ **EXPERIMENTAL / NOT RUN** | 没有硬件也没装 libm2k。checklist 见 [docs/10](docs/10-adalm2000-hardware-validation.md)，`hardwareVerified` 保持 `false` |
+| ADALM2000 Mock Bridge | ✅ VERIFIED | CI `Bridge (pytest)` job：82 项 + 冒烟里的危险操作拦截 |
+| ADALM2000 AWG 频率规划 | ✅ VERIFIED（**仅数学**） | 1Hz–10MHz 规划误差 0，26 条单测。**这不是硬件验证** |
+| **ADALM2000 真实硬件** | ⚠️ **EXPERIMENTAL / NOT RUN** | 没有硬件也没装 libm2k。可直接填的验证单见 [docs/10](docs/10-adalm2000-hardware-validation.md)，`hardwareVerified` 保持 `false` |
 | 真实 LLM（Gemini） | ✅ VERIFIED | `LLM_PROVIDER=gemini pnpm test:agent` 11/11（早期验证） |
 | ezPLM 器件库 · 签名算法 | ✅ VERIFIED | 对厂商 demo 的 golden vector 逐条比对，`pnpm test` 内 |
 | **ezPLM 器件库 · 真实接口** | ⬜ NOT RUN | 没有 API Key。`pnpm test:parts-real` 备好，见 [docs/11](docs/11-parts-database.md) §9 |

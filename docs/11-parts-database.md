@@ -160,6 +160,22 @@ PARTS_CACHE_TTL_DAYS=7
 PARTS_EMBED_ON_MIRROR=true
 ```
 
+### 变量别名
+
+手册与联调步骤里用 `EZPLM_*`，adapter 层用与 provider 无关的 `PARTS_*`。
+**两套都认，`PARTS_*` 优先**：
+
+| 别名 | 等价于 |
+| --- | --- |
+| `EZPLM_API_KEY` | `PARTS_API_KEY` |
+| `EZPLM_BASE_URL` | `PARTS_API_BASE_URL` |
+| `EZPLM_PAGE_SIZE` | `PARTS_PAGE_SIZE` |
+| `EZPLM_TIMEOUT_MS` | `PARTS_TIMEOUT_MS` |
+
+**只设 key 不改 `PARTS_PROVIDER=remote` 是最容易白跑一轮的配置错误**：一切正常，
+只是数据仍然来自内置那 5 颗器件。这种情况 `/health` 的 `parts.lastError` 会写
+「已配置 API Key，但 PARTS_PROVIDER 不是 remote」。
+
 `PARTS_BATCH_SIZE` / `PARTS_MAX_CONCURRENCY` 对 ezPLM **不生效**：它没有批量
 端点，且配额按天计而不是按 QPS —— 并发只会更快烧完当天额度，拿不到更多数据。
 两个变量留着是为了将来接别的库。
@@ -261,10 +277,12 @@ L2 的前缀候选由长到短，先试最具体的。**逐位截断到 6 位**�
 
 ```bash
 PARTS_PROVIDER=remote PARTS_API_KEY=<key> pnpm test:parts-real
+# 或用手册里的变量名：
+PARTS_PROVIDER=remote EZPLM_API_KEY=<key> pnpm test:parts-real
 ```
 
-没配 `PARTS_API_KEY` 就 `SKIPPED` 并退 0。CI 不跑它 —— **ezPLM 的配额按天算**，
-每跑一次 CI 就少一天的额度。
+没配 key 就 `SKIPPED` 并退 0。CI 不跑它 —— **ezPLM 的配额按天算**，
+每跑一次 CI 就少一天的额度。脚本只发 4~5 个请求，也是为了省配额。
 
 脚本只发 4~5 个请求，把三件事一次问清楚：
 
