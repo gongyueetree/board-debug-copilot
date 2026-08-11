@@ -80,8 +80,29 @@ ALLOW_MOCK_STORAGE_IN_PRODUCTION=true
 豁免后能启动，但 `storage.degraded` 仍是 `true`。
 
 > **已经部署过的服务注意**：这条校验是后加的。如果 Railway 上的 api / worker
-> 目前跑在 `NODE_ENV=production` 且没配 S3，**下一次部署会起不来** ——
-> 二选一：配好上面那组 `S3_*`，或者先加 `ALLOW_MOCK_STORAGE_IN_PRODUCTION=true`。
+> 目前跑在 `NODE_ENV=production` 且没配 S3，**下一次部署会起不来**。
+>
+> 这件事已经发生过一次（2026-08-10，worker `Crashed`、api `Deployment failed`），
+> 日志里是这段：
+>
+> ```
+> NODE_ENV=production 时不允许使用 mock 对象存储。
+> 二选一：
+>   1) 配置真实对象存储：STORAGE_ADAPTER=s3 + S3_ENDPOINT / S3_BUCKET / ...
+>   2) 明知故犯（仅内置 Demo）：ALLOW_MOCK_STORAGE_IN_PRODUCTION=true
+> ```
+>
+> **api 与 worker 是两个独立服务，两边都要设。** 只设一边的话，另一边会以
+> 完全相同的信息再崩一次 —— 而那时很容易误以为「设了没生效」。
+>
+> 临时救急（内置 Demo 可接受，数据随容器重建消失）：
+>
+> ```
+> Railway → api 服务 → Variables → 新增 ALLOW_MOCK_STORAGE_IN_PRODUCTION = true
+> Railway → worker 服务 → Variables → 同样加一遍
+> ```
+>
+> 正解是配 R2（见 `docs/09-storage-validation.md` §3），两边都加那组 `S3_*`。
 
 验证真实存储：`pnpm test:storage-real`（本地 MinIO 一条命令起，见
 `docs/09-storage-validation.md`）。

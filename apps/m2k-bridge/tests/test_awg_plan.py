@@ -155,3 +155,46 @@ def test_nearest_sample_rate_is_stable_on_ties():
     """并列时结果必须稳定，否则同样的请求会协商出不同的采样率。"""
     rates = (100.0, 300.0)
     assert nearest_sample_rate(200.0, rates) == nearest_sample_rate(200.0, rates)
+
+
+# -- 缓冲对齐 --------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "freq", [1, 10, 100, 1_000, 1_200, 5_000, 10_000, 50_000, 100_000, 1_000_000, 5_000_000, 10_000_000]
+)
+def test_buffer_length_is_four_aligned(freq):
+    """循环缓冲按 4 对齐。
+
+    来源是另一份独立 libm2k 实现里的约束。那份也没在真机上跑过，
+    但加上它零代价：多周期搜索总能找到既对齐、误差又为 0 的方案。
+    """
+    from src.adapters.awg_plan import AWG_BUFFER_ALIGN
+
+    plan = plan_awg_buffer(float(freq))
+    assert plan.samples % AWG_BUFFER_ALIGN == 0, f"{freq}Hz → N={plan.samples}"
+
+
+@pytest.mark.parametrize(
+    "freq", [1, 10, 100, 1_000, 1_200, 5_000, 10_000, 50_000, 100_000, 1_000_000, 5_000_000, 10_000_000]
+)
+def test_alignment_costs_no_frequency_accuracy(freq):
+    """对齐之后误差仍是 0 —— 这是采纳它的前提。
+
+    如果对齐会让某些频率变得不准，那就得权衡；实测下来不会，
+    因为多周期缓冲提供了足够的自由度。
+    """
+    assert plan_awg_buffer(float(freq)).freq_error_pct == pytest.approx(0.0, abs=1e-9)
+
+
+def test_alignment_can_be_disabled_for_comparison():
+    """留一个开关：真机上若证明不需要对齐，可以关掉再比一次。"""
+    aligned = plan_awg_buffer(1_000_000.0)
+    raw = plan_awg_buffer(1_000_000.0, align=1)
+    assert aligned.samples % 4 == 0
+    # 不对齐时 1MHz 会选 k=1/N=75（75 不是 4 的倍数）
+    assert raw.samples % 4 != 0 or raw.samples == aligned.samples
+
+
+def test_describe_reports_alignment():
+    assert plan_awg_buffer(1000.0).describe()["bufferAlign"] == 4

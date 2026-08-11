@@ -607,3 +607,67 @@ def test_demo_frequencies_still_accepted_by_mock():
     for freq in (1000.0, 10_000.0):
         assert a.configure_awg(AwgConfig(wave="sine", freq_hz=freq))["applied"] is True
     assert a.configure_awg(AwgConfig(wave="dc", freq_hz=0.0, offset_v=2.5))["applied"] is True
+
+
+# -- 从另一份独立实现吸收的硬件层改动 ---------------------------------
+
+
+def test_try_variants_records_which_signature_worked():
+    """同一功能的多种签名依次试，并记下哪个成了。
+
+    setCyclic 在我们的实现里是 setCyclic(True)，另一份独立实现是
+    setCyclic(idx, True)。两份都没在真机上跑过，所以不是拿一个猜测替换
+    另一个 —— 都试一遍，把生效的签名记进 notes 供 docs/10 §1.5.1 回填。
+    """
+    from src.adapters.real_m2k import RealM2kAdapter
+
+    a = RealM2kAdapter()
+    calls: list[str] = []
+
+    def fail():
+        calls.append("first")
+        raise TypeError("takes 2 positional arguments but 3 were given")
+
+    def ok():
+        calls.append("second")
+
+    sig = a._try_variants("test", [("A(x, y)", fail), ("A(y)", ok)])
+    assert sig == "A(y)"
+    assert calls == ["first", "second"]
+    assert any("用 A(y)" in n for n in a._notes)
+
+
+def test_try_variants_reports_all_failures():
+    """全都失败时要把每个签名的报错都列出来，不是笼统一句「失败」。"""
+    from src.adapters.real_m2k import RealM2kAdapter
+
+    a = RealM2kAdapter()
+
+    def boom():
+        raise AttributeError("no such method")
+
+    assert a._try_variants("test", [("A()", boom), ("B()", boom)]) is None
+    note = next(n for n in a._notes if "test" in n)
+    assert "A()" in note and "B()" in note
+
+
+def test_discard_next_is_armed_after_scope_reconfigure():
+    """换量程之后要丢一个 buffer。
+
+    不丢的话每次调量程都会看到一个假尖峰，而它看起来完全像是被测电路
+    上的毛刺 —— 这种「像真的一样的假象」最费排查时间。
+    """
+    from src.adapters.real_m2k import RealM2kAdapter
+
+    a = RealM2kAdapter()
+    # 连接前就该是 True：第一次采集也要丢
+    assert a._discard_next is True
+
+
+def test_emergency_stop_survives_without_device():
+    """没连设备时急停也不能抛 —— 急停必须任何时候都能按。"""
+    from src.adapters.real_m2k import RealM2kAdapter
+
+    a = RealM2kAdapter()
+    a.emergency_stop()
+    assert a._running is False

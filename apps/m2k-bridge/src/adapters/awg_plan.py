@@ -42,6 +42,17 @@ DEFAULT_SCOPE_RATES: tuple[float, ...] = (
 
 MIN_SAMPLES = 16
 MAX_SAMPLES = 16_384
+
+#: 循环缓冲的样点数按 4 对齐。
+#:
+#: 来源：另一份独立的 libm2k 实现（T28 交付包的 libm2k_backend.py）里写着
+#: 「libm2k 循环 buffer 的样点数必须按 4 对齐」。那份实现同样没在真机上跑过，
+#: 所以这不是权威结论 —— 但加上它**零代价**：多周期搜索总能找到既对齐、
+#: 误差又为 0 的方案（1MHz 从 k=1/N=75 换成 k=4/N=300）。
+#:
+#: 不对齐而硬件确实要求对齐 → 波形出错或 push 失败；
+#: 对齐而硬件其实不要求 → 什么都不损失。所以对齐。
+AWG_BUFFER_ALIGN = 4
 #: 每周期少于这么多点，波形已经不成形（方波还行，正弦就是折线了）
 MIN_SAMPLES_PER_CYCLE = 4
 
@@ -76,6 +87,7 @@ class AwgPlan:
             "requestedFreqHz": self.requested_freq_hz,
             "freqErrorPct": round(self.freq_error_pct, 4),
             "samplesPerCycle": round(self.samples_per_cycle, 2),
+            "bufferAlign": AWG_BUFFER_ALIGN,
         }
 
 
@@ -87,6 +99,7 @@ def plan_awg_buffer(
     max_samples: int = MAX_SAMPLES,
     max_cycles: int = 64,
     min_samples_per_cycle: int = MIN_SAMPLES_PER_CYCLE,
+    align: int = AWG_BUFFER_ALIGN,
 ) -> AwgPlan:
     """挑 (采样率, 缓冲长度, 周期数) 使输出频率最接近 freq_hz。
 
@@ -109,6 +122,8 @@ def plan_awg_buffer(
         for k in range(1, max_cycles + 1):
             exact = k * rate / freq_hz
             n = int(round(exact))
+            if align > 1:
+                n = max(align, int(round(n / align)) * align)
             if n < min_samples or n > max_samples:
                 continue
             if n / k < min_samples_per_cycle:

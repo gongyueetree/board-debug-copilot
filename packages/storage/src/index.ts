@@ -475,6 +475,9 @@ export function assertStorageUsable(env: NodeJS.ProcessEnv = process.env): void 
       '  1) 配置真实对象存储：STORAGE_ADAPTER=s3 + S3_ENDPOINT / S3_BUCKET /',
       '     S3_ACCESS_KEY_ID / S3_SECRET_ACCESS_KEY（R2、S3、MinIO 均可，见 docs/09）',
       '  2) 明知故犯（仅内置 Demo）：ALLOW_MOCK_STORAGE_IN_PRODUCTION=true',
+      '',
+      '注意：api 与 worker 是两个独立服务，**两边都要设**。',
+      '只设一边的话，另一边会以完全相同的信息再崩一次。',
     ].join('\n'),
     'BACKEND',
   )

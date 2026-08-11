@@ -73,6 +73,9 @@ class RealM2kAdapter:
         #: 可选调用的成败记录。真机排查时这是最有用的一列信息。
         self._notes: list[str] = []
         self._last_awg: dict | None = None
+        #: 换量程或校准之后头一个 buffer 会有跳变。不丢的话每次调量程都会
+        #: 看到一个假的尖峰 —— 而那看起来完全像是被测电路的问题。
+        self._discard_next = True
 
     # -- 内部工具 ---------------------------------------------------------
 
@@ -93,6 +96,25 @@ class RealM2kAdapter:
         except Exception as exc:  # noqa: BLE001 - 这里就是要兜住任意异常并记录
             self._note(f"[SKIP] {label}: {type(exc).__name__}: {exc}")
             return None
+
+    def _try_variants(self, label: str, variants: list[tuple[str, Any]]):
+        """同一个功能在不同 libm2k 版本里签名不同时，依次试，记下哪个成了。
+
+        用在两份独立实现给出不同写法的地方 —— 例如 setCyclic：我们原本调
+        `setCyclic(True)`，另一份实现调 `setCyclic(idx, True)`。两份都没在
+        真机上跑过，所以**不是拿一个猜测替换另一个猜测**，而是都试一遍，
+        并把生效的那个签名记进 notes 供 docs/10 §1.5.1 回填。
+        """
+        errors = []
+        for sig, call in variants:
+            try:
+                call()
+                self._note(f"[OK ] {label} 用 {sig}")
+                return sig
+            except Exception as exc:  # noqa: BLE001
+                errors.append(f"{sig}: {type(exc).__name__}: {exc}")
+        self._note(f"[SKIP] {label} 全部签名都失败 —— {' | '.join(errors)}")
+        return None
 
     def _require_lib(self) -> None:
         if libm2k is None:
@@ -170,6 +192,7 @@ class RealM2kAdapter:
             # 但必须记下来：没校准的读数会有偏差，同事得知道。
             self._try("calibrateADC", self._ctx.calibrateADC)
             self._try("calibrateDAC", self._ctx.calibrateDAC)
+            self._discard_next = True
 
             self._ain = self._ctx.getAnalogIn()
             self._aout = self._ctx.getAnalogOut()
@@ -229,10 +252,28 @@ class RealM2kAdapter:
         cycles = plan.cycles if plan else 1
 
         try:
-            self._aout.setSampleRate(idx, rate)
+            # setSampleRate 会返回**实际**生效的采样率。用返回值而不是请求值 ——
+            # DAC 采样率是分档的，设 7.5MSPS 未必精确落到，而输出频率
+            # = 采样率/缓冲长度，采样率偏了频率就跟着偏，且没有别的信号。
+            applied_rate = self._aout.setSampleRate(idx, rate)
+            if isinstance(applied_rate, (int, float)) and applied_rate > 0:
+                if abs(float(applied_rate) - rate) > 1e-6:
+                    self._note(f"[NOTE] AWG 采样率请求 {rate:.0f} 实际 {float(applied_rate):.0f}")
+                rate = float(applied_rate)
+
             self._aout.enableChannel(idx, True)
-            # 必须显式设循环，否则缓冲播完就停，输出变成一个脉冲
-            self._try("aout.setCyclic", self._aout.setCyclic, True)
+
+            # 必须显式设循环，否则缓冲播完就停，输出变成一个脉冲 ——
+            # 示波器上是一条直线，很容易被当成「没有输出」。
+            # 两种签名都试：另一份独立实现用的是带通道参数的那个。
+            cyclic_sig = self._try_variants(
+                "aout.setCyclic",
+                [
+                    ("setCyclic(idx, True)", lambda: self._aout.setCyclic(idx, True)),
+                    ("setCyclic(True)", lambda: self._aout.setCyclic(True)),
+                ],
+            )
+
             buf = synthesize_wave(config.wave, samples, cycles, config.amplitude_vpp, config.offset_v)
             self._aout.push(idx, buf.tolist())
         except AdapterError:
@@ -248,6 +289,10 @@ class RealM2kAdapter:
             "offsetV": config.offset_v,
             # 实际频率与请求频率分开报：它们可能不同，调用方必须能看出来
             **(plan.describe() if plan else {"actualFreqHz": 0.0, "requestedFreqHz": config.freq_hz}),
+            # 采样率被设备改过的话，实际频率要跟着重算 —— 见上面的 setSampleRate 读回
+            **({"actualFreqHz": round(cycles * rate / samples, 4)} if plan and rate != plan.sample_rate else {}),
+            "appliedSampleRate": rate,
+            "cyclicSignature": cyclic_sig,
             "notes": list(self._notes[-8:]),
         }
         self._last_awg = applied
@@ -279,6 +324,9 @@ class RealM2kAdapter:
             rng = getattr(libm2k, "PLUS_MINUS_25V", None)
             if rng is not None:
                 self._try(f"ain.setRange({ch}, ±25V)", self._ain.setRange, ch, rng)
+            self._try(f"ain.setVerticalOffset({ch}, 0)", self._ain.setVerticalOffset, ch, 0.0)
+        # 换过量程，下一次采集先丢一个 buffer
+        self._discard_next = True
 
         return {
             "applied": True,
@@ -293,6 +341,12 @@ class RealM2kAdapter:
         if not self._running:
             raise AdapterError("示波器已停止", "NOT_RUNNING")
         try:
+            if self._discard_next:
+                # 换量程/校准之后头一个 buffer 有跳变，丢掉。
+                # 留着的话每次调量程都会看到一个假尖峰，而它看起来
+                # 完全像是被测电路上的毛刺。
+                self._try("丢弃换挡后的首个 buffer", self._ain.getSamples, samples)
+                self._discard_next = False
             data = self._ain.getSamples(samples)
         except Exception as exc:  # pragma: no cover
             raise AdapterError(f"采集失败：{exc}", "ACQUIRE_FAILED") from exc
@@ -337,7 +391,19 @@ class RealM2kAdapter:
         )
 
     def emergency_stop(self) -> None:
+        """先停输出，再解除采集，最后置停止位。
+
+        顺序是有讲究的：**先断信号源，不要先断被测电路的供电** ——
+        那样运放会在输入端还挂着信号的情况下失电，比不断更危险。
+        我们这个 Bridge 不控制电源，所以只剩「先停 AWG」这一条。
+
+        每一步单独兜异常：中间某一步抛了，后面的还得继续关。
+        """
         self.disable_awg()
+        if self._ain is not None:
+            # 解除正在等样本/等触发的 getSamples。不解除的话急停之后
+            # 那个调用还挂着，下一次采集会阻塞。
+            self._try("ain.cancelAcquisition", self._ain.cancelAcquisition)
         self._running = False
 
     # -- 诊断 -------------------------------------------------------------
