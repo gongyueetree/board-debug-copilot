@@ -9,12 +9,13 @@
   <link rel="stylesheet" href="/wake.css" />
   <link rel="stylesheet" href="/deepvision-ui.css?v=0.5.2" />
   <link rel="stylesheet" href="/markdown-ui.css?v=0.5.3" />
+  <link rel="stylesheet" href="/realtime-voice.css?v=0.6.0" />
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
     <div class="brandmark">LS</div>
-    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.5 · Deep Vision · OpenAI + Gemini</div></div>
+    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.6 · Realtime Voice · OpenAI + Gemini</div></div>
   </div>
   <div class="statusrow">
     <span id="apiStatus" class="pill neutral">AI 检查中…</span>
@@ -76,7 +77,7 @@
       <button id="analyzeBtn" class="primary big">✦ 分析当前画面</button>
       <button id="deepVisionBtn" class="deepvision big">⌕ PCB Deep Vision</button>
       <label class="toggle"><input id="autoSpeak" type="checkbox" checked><span>自动语音回答</span></label>
-      <label class="toggle"><input id="cloudTts" type="checkbox"><span>自然语音</span></label>
+      <label class="toggle"><input id="cloudTts" type="checkbox"><span>实时语音</span></label>
     </div>
     <div id="deepVisionState" class="deepvision-state hidden"></div>
     <div class="capture-preview-wrap"><img id="capturePreview" alt="最近截图" /><div class="capture-meta" id="captureMeta">尚未截图</div></div>
@@ -134,11 +135,12 @@ PCB Deep Vision：使用整板图 + 6 个高清局部 Tile，优先读取丝印�
 </section>
 </main>
 
-<footer>LabSight EVT0.5 · PCB Deep Vision · OpenAI + Gemini · Vercel stateless build</footer>
+<footer>LabSight EVT0.6 · Realtime Voice · OpenAI + Gemini · Vercel stateless build</footer>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
-<script src="/app.js?v=0.5.4"></script>
+<script src="/app.js?v=0.5.5"></script>
 <script src="/markdown-ui.js?v=0.5.3"></script>
 <script src="/deepvision-ui.js?v=0.5.3"></script>
-<script src="/voice-upgrade.js?v=0.5.4"></script>
+<script src="/voice-upgrade.js?v=0.5.5"></script>
+<script src="/realtime-voice.js?v=0.6.0"></script>
 </body>
 </html>
