@@ -21,7 +21,7 @@ Vercel Function 请求体有 4.5MB 限制，因此本版本不再把 80MB 级 Ki
 这个原型当前位于 `board-debug-copilot` 仓库的 `labsight-vercel/` 子目录。
 
 1. 在 Vercel 导入 `gongyueetree/board-debug-copilot`。
-2. Branch 选择 `labsight-vercel-evt0`（测试阶段）；合并 PR 后可改回 `main`。
+2. Production Branch 使用 `main`。
 3. **Root Directory 设置为 `labsight-vercel`**。
 4. Framework Preset 选择 **Other**（通常自动识别即可）。
 5. 在 **Settings → Environment Variables** 添加：
