@@ -9,7 +9,7 @@ import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="LabSight PCB Deep Vision", version="0.5.0")
+app = FastAPI(title="LabSight PCB Deep Vision", version="0.5.1")
 
 MAX_TOTAL_IMAGE_CHARS = 3_600_000
 MAX_CONTEXT_CHARS = 24_000
@@ -43,22 +43,24 @@ def _project_text(ctx: dict[str, Any] | None) -> str:
 
 
 DEEP_PROMPT = """
-你是 LabSight PCB Deep Vision，引擎目标不是泛泛描述，而是尽可能从高清 PCB 照片里提取工程信息。
+你是 LabSight PCB Deep Vision。任务是把高清 PCB 图片转换成工程师可读的结构化事实，而不是泛泛描述。
 
-输入包含：
-- IMAGE 0：PCB 整体概览；
-- IMAGE 1..N：从原始高清帧裁出的重叠局部区域，专门用于读取丝印、芯片顶标、接口标记和频率标记。
+输入：IMAGE 0 是 PCB 整体；IMAGE 1..N 是高清局部 Tile。
 
-执行优先级：
-1. 首先逐字读取所有可见文字。板名、接口、引脚标签、频率、测试点、芯片顶标优先级最高。
-2. 对每个主要 IC / 晶振 / 模块，尽量给出实际可见 marking；不要只说“一个芯片”。
-3. 字符部分可见时，给出 1~3 个候选值和 confidence，不要因为不能 100% 确定就全部省略。
-4. 根据可见丝印、封装、连接和板名推断器件作用，但明确区分 observed 与 inferred。
-5. 如果有 KiCad 上下文，把视觉读到的位号/型号与工程内容交叉核对。
-6. 不要把明显可读的文字称为“模糊”。只有确实无法辨认时才写 unreadable。
-7. 对 PCB 功能给出信号链：电源/控制输入 -> 核心处理 -> 输出，能确认多少写多少。
+优先级：
+1. 逐字读取板名、丝印、接口/引脚标签、频率、测试点、芯片顶标。
+2. 主要 IC/晶振/运放/电源器件尽量给出 marking、候选型号、作用和置信度。
+3. 字符部分可见时给候选值，不要因非 100% 确定而省略；observed 与 inferred 分开。
+4. 有 KiCad 时与位号/型号/网络交叉核对。
+5. 给出电源/控制 -> 核心处理 -> 输出的信号链。
 
-必须只返回 JSON，不要 Markdown 代码围栏。结构：
+为了保证 JSON 完整，输出必须精炼并严格限制数量：
+- visible_texts 最多 24 项，只保留有工程意义的文字，重复项合并；
+- components 最多 12 项；connectors 最多 8 项；
+- signal_chain 最多 8 步；uncertain_items 最多 8 项；next_actions 最多 6 项；
+- summary 120~250 个中文字；board_function 300 个中文字以内。
+
+必须只返回一个完整 JSON 对象，不要 Markdown，不要解释，不要在 JSON 后追加文字：
 {
   "board_identity": {"name":"", "type":"", "confidence":0.0, "evidence":[]},
   "visible_texts": [{"text":"", "kind":"board_title|silkscreen|pin_label|frequency|chip_marking|testpoint|other", "region":"", "confidence":0.0}],
@@ -70,8 +72,7 @@ DEEP_PROMPT = """
   "next_actions": [],
   "summary":""
 }
-
-summary 用中文写成适合工程师阅读的精炼结论。confidence 范围 0~1。
+confidence 范围 0~1；summary 用中文。
 """.strip()
 
 
@@ -84,14 +85,22 @@ def _extract_json(text: str) -> dict[str, Any]:
     except json.JSONDecodeError:
         start, end = cleaned.find("{"), cleaned.rfind("}")
         if start >= 0 and end > start:
+            candidate = cleaned[start:end + 1]
             try:
-                return json.loads(cleaned[start:end + 1])
+                return json.loads(candidate)
             except json.JSONDecodeError:
-                pass
-    return {"summary": cleaned, "raw_model_output": cleaned}
+                try:
+                    return json.loads(re.sub(r",\s*([}\]])", r"\1", candidate))
+                except json.JSONDecodeError:
+                    pass
+    return {
+        "summary": "模型返回的结构化结果不完整。请重新执行 PCB Deep Vision；原始输出已保留供诊断。",
+        "raw_model_output": cleaned,
+        "parse_error": True,
+    }
 
 
-def _gemini(req: DeepVisionRequest) -> tuple[dict[str, Any], str]:
+def _gemini(req: DeepVisionRequest) -> tuple[dict[str, Any], str, str | None]:
     key = os.getenv("GEMINI_API_KEY")
     if not key:
         raise HTTPException(status_code=503, detail="未配置 GEMINI_API_KEY")
@@ -103,7 +112,12 @@ def _gemini(req: DeepVisionRequest) -> tuple[dict[str, Any], str]:
         parts.append({"inlineData": {"mimeType": mime, "data": b64}})
     payload = {
         "contents": [{"role": "user", "parts": parts}],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 5000, "responseMimeType": "application/json"},
+        "generationConfig": {
+            "temperature": 0.05,
+            "maxOutputTokens": 8192,
+            "responseMimeType": "application/json",
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
     }
     r = requests.post(
         f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
@@ -115,10 +129,15 @@ def _gemini(req: DeepVisionRequest) -> tuple[dict[str, Any], str]:
         raise HTTPException(status_code=502, detail=f"Gemini Deep Vision error {r.status_code}: {r.text[:1600]}")
     data = r.json()
     texts = [p.get("text", "") for c in data.get("candidates", []) for p in c.get("content", {}).get("parts", []) if p.get("text")]
-    return _extract_json("\n".join(texts)), model
+    finish = (data.get("candidates") or [{}])[0].get("finishReason")
+    result = _extract_json("\n".join(texts))
+    if finish == "MAX_TOKENS":
+        result["truncated"] = True
+        result.setdefault("summary", "Gemini 输出达到长度上限，请重新执行 Deep Vision 或缩小识别范围。")
+    return result, model, finish
 
 
-def _openai(req: DeepVisionRequest) -> tuple[dict[str, Any], str]:
+def _openai(req: DeepVisionRequest) -> tuple[dict[str, Any], str, str | None]:
     key = os.getenv("OPENAI_API_KEY")
     if not key:
         raise HTTPException(status_code=503, detail="未配置 OPENAI_API_KEY")
@@ -127,13 +146,13 @@ def _openai(req: DeepVisionRequest) -> tuple[dict[str, Any], str]:
     for i, image in enumerate([req.overview_image, *req.tile_images]):
         content.append({"type": "input_text", "text": f"IMAGE {i}"})
         content.append({"type": "input_image", "image_url": image, "detail": "high"})
-    payload = {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": 5000}
+    payload = {"model": model, "input": [{"role": "user", "content": content}], "max_output_tokens": 8192}
     r = requests.post("https://api.openai.com/v1/responses", headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"}, json=payload, timeout=90)
     if r.status_code >= 400:
         raise HTTPException(status_code=502, detail=f"OpenAI Deep Vision error {r.status_code}: {r.text[:1600]}")
     data = r.json()
     texts = [p.get("text", "") for item in data.get("output", []) if item.get("type") == "message" for p in item.get("content", []) if p.get("type") == "output_text" and p.get("text")]
-    return _extract_json("\n".join(texts)), model
+    return _extract_json("\n".join(texts)), model, data.get("status")
 
 
 @app.post("/api/pcb_deep_analyze")
@@ -146,9 +165,9 @@ def pcb_deep_analyze(req: DeepVisionRequest):
         raise HTTPException(status_code=413, detail=f"Deep Vision 图像总量过大 ({total_chars} chars)，请降低 tile JPEG 质量")
     provider = req.provider.lower().strip()
     if provider == "gemini":
-        result, model = _gemini(req)
+        result, model, finish = _gemini(req)
     elif provider == "openai":
-        result, model = _openai(req)
+        result, model, finish = _openai(req)
     else:
         raise HTTPException(status_code=400, detail="provider 仅支持 gemini/openai")
     return {
@@ -156,6 +175,7 @@ def pcb_deep_analyze(req: DeepVisionRequest):
         "mode": "pcb_deep_vision",
         "provider": provider,
         "model": model,
+        "finish_reason": finish,
         "source": {"width": req.source_width, "height": req.source_height, "images": len(images), "payload_chars": total_chars},
         "result": result,
     }
