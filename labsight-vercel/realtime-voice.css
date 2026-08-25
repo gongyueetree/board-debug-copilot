@@ -3,15 +3,15 @@
   background: rgba(100, 24, 34, .35) !important;
   color: #ffb8bf !important;
   box-shadow: 0 0 0 1px rgba(255, 92, 105, .12), 0 0 18px rgba(255, 92, 105, .10);
+  font-size: 0;
 }
 .voicebtn.speaking::before {
   content: '■';
   margin-right: 6px;
-  font-size: .8em;
-}
-.voicebtn.speaking {
-  font-size: 0;
+  font-size: 12px;
+  vertical-align: middle;
 }
 .voicebtn.speaking span {
   font-size: 13px;
+  vertical-align: middle;
 }
