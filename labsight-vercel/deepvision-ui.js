@@ -21,6 +21,11 @@
     return tryParseEmbeddedJson(r.raw_model_output) || tryParseEmbeddedJson(r.summary) || r;
   }
 
+  function looksLikeJsonText(value) {
+    const s = String(value || '').trim();
+    return s.startsWith('{') || s.startsWith('[') || /"board_identity"|"visible_texts"|"components"/.test(s);
+  }
+
   function section(title, icon, body, extra='') {
     if (!body) return '';
     return `<section class="dv-section ${extra}"><div class="dv-section-title"><span>${icon}</span><strong>${esc(title)}</strong></div>${body}</section>`;
@@ -66,10 +71,15 @@
     const chain = Array.isArray(r.signal_chain) ? r.signal_chain.filter(Boolean) : [];
     const uncertain = Array.isArray(r.uncertain_items) ? r.uncertain_items.filter(Boolean) : [];
     const next = Array.isArray(r.next_actions) ? r.next_actions.filter(Boolean) : [];
+    const cleanSummary = (!r.parse_error && !looksLikeJsonText(r.summary)) ? r.summary : '';
 
     let html = `<div class="dv-header"><div><div class="dv-kicker">PCB DEEP VISION</div><h3>${esc(b.name || 'PCB 深度视觉分析')}</h3></div><div class="dv-provider">${esc(String(d?.provider||'AI').toUpperCase())} · ${esc(d?.model||'')}</div></div>`;
     if (facts.length) html += `<div class="dv-chips">${facts.join('')}</div>`;
-    if (r.summary) html += `<div class="dv-summary">${esc(r.summary)}</div>`;
+    if (r.parse_error || r.truncated) {
+      html += `<div class="dv-summary" style="border-color:rgba(242,190,92,.45);background:rgba(242,190,92,.08)">本次模型输出的结构化 JSON 没有完整闭合，已隐藏原始 JSON。请重新执行一次 PCB Deep Vision；如果连续发生，我会继续缩短模型输出并分阶段合并。</div>`;
+    } else if (cleanSummary) {
+      html += `<div class="dv-summary">${esc(cleanSummary)}</div>`;
+    }
     html += section('可见丝印与标记','Aa',texts);
     html += section('关键器件','▣',comps);
     html += section('接口与引脚','↔',conns);
@@ -79,7 +89,7 @@
     if (next.length) html += section('下一步建议','✓',`<ol class="dv-steps action">${next.slice(0,10).map(x=>`<li>${esc(x)}</li>`).join('')}</ol>`,'actions');
 
     const raw = r.raw_model_output || d?.result;
-    html += `<details class="dv-raw"><summary>查看原始 JSON / 模型输出</summary><pre>${esc(typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2))}</pre></details>`;
+    if (raw) html += `<details class="dv-raw"><summary>技术诊断：查看原始模型输出</summary><pre>${esc(typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2))}</pre></details>`;
 
     bubble.innerHTML = html;
     wrap.appendChild(bubble);
@@ -110,7 +120,7 @@
       const d=await readJsonResponse(resp);
       thinking.remove();
       const rendered=renderDeepReport(d);
-      const summary=rendered.result.summary || rendered.result.board_function || `已完成 ${rendered.result.board_identity?.name || 'PCB'} 深度识别`;
+      const summary=(!rendered.result.parse_error && !looksLikeJsonText(rendered.result.summary)) ? (rendered.result.summary || rendered.result.board_function || `已完成 ${rendered.result.board_identity?.name || 'PCB'} 深度识别`) : 'PCB Deep Vision 已完成，但本次结构化输出不完整。';
       state.conversation.push({role:'user',content:`PCB Deep Vision: ${q}`},{role:'assistant',content:String(summary).slice(0,2500)});
       if(state.conversation.length>20) state.conversation=state.conversation.slice(-20);
       els.deepVisionState.textContent=`完成 · ${d.model} · ${d.source?.images||7} 张图 · 原始 ${d.source?.width||'?'}×${d.source?.height||'?'}`;
