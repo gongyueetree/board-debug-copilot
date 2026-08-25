@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta name="theme-color" content="#0b0f14" />
-  <title>LabSight Vision Debugger · Dual Provider</title>
+  <title>LabSight Vision Debugger · Deep Vision</title>
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/wake.css" />
 </head>
@@ -12,7 +12,7 @@
 <header class="topbar">
   <div class="brand">
     <div class="brandmark">LS</div>
-    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.4 · OpenAI + Gemini</div></div>
+    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.5 · Deep Vision · OpenAI + Gemini</div></div>
   </div>
   <div class="statusrow">
     <span id="apiStatus" class="pill neutral">AI 检查中…</span>
@@ -28,7 +28,7 @@
     <div class="panelhead">
       <div>
         <h2>实时视觉</h2>
-        <p>Insta360 Link 2C / UVC 摄像头 + 麦克风。分析时自动抓取当前帧。</p>
+        <p>Insta360 Link 2C / UVC 摄像头 + 麦克风。Deep Vision 会从原始高清帧生成整板图与多个局部 Tile。</p>
       </div>
       <div class="scene-tabs" role="tablist">
         <button class="scene active" data-scene="pcb">PCB</button>
@@ -47,7 +47,7 @@
       </div>
       <div class="provider-meta">
         <strong id="providerMeta">检查中…</strong>
-        <span>同一画面、同一 KiCad 上下文可直接切换模型做 A/B 测试</span>
+        <span>普通分析用于快速观察；PCB Deep Vision 专门读取丝印、芯片顶标、接口与板级功能</span>
       </div>
     </div>
 
@@ -61,7 +61,7 @@
     <div class="viewer">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="captureCanvas"></canvas>
-      <div class="focus-guide"><span>把 PCB / 波形主体放在框内</span></div>
+      <div class="focus-guide"><span>Deep Vision ROI · 把整块 PCB 放在框内</span></div>
       <div class="viewer-badge" id="viewerBadge">LIVE</div>
       <div class="viewer-empty" id="viewerEmpty">
         <div class="camera-icon">◉</div><strong>连接 Insta360 Link 2C</strong>
@@ -72,9 +72,11 @@
     <div class="capturebar">
       <button id="captureBtn" class="secondary big">📷 抓取当前帧</button>
       <button id="analyzeBtn" class="primary big">✦ 分析当前画面</button>
+      <button id="deepVisionBtn" class="deepvision big">⌕ PCB Deep Vision</button>
       <label class="toggle"><input id="autoSpeak" type="checkbox" checked><span>自动语音回答</span></label>
       <label class="toggle"><input id="cloudTts" type="checkbox"><span>OpenAI 云 TTS</span></label>
     </div>
+    <div id="deepVisionState" class="deepvision-state hidden"></div>
     <div class="capture-preview-wrap"><img id="capturePreview" alt="最近截图" /><div class="capture-meta" id="captureMeta">尚未截图</div></div>
   </div>
 
@@ -104,12 +106,12 @@
     </div>
 
     <div id="chat" class="chat">
-      <div class="message assistant"><div class="bubble">现在可以在顶部直接切换 OpenAI / Gemini 做 A/B 测试。
+      <div class="message assistant"><div class="bubble">PCB 模式现在有两种分析：
 
-例如：
-“这块板子的 3V3 电源应该先测哪里？”
-“示波器上的信号频率和 Vpp 是多少？”
-“我现在红表笔放的位置对吗？”</div></div>
+普通分析：快速回答当前问题。
+PCB Deep Vision：使用整板图 + 6 个高清局部 Tile，优先读取丝印、IC 顶标、接口标签、频率标记并输出器件/接口清单。
+
+把 PCB 尽量放满绿色取景框，然后点击 “PCB Deep Vision”。</div></div>
     </div>
 
     <div class="quickprompts">
@@ -129,20 +131,21 @@
   </div>
 
   <div class="panel checklist-panel">
-    <h3>EVT0.4 双 Provider 能力</h3>
+    <h3>EVT0.5 · PCB Deep Vision</h3>
     <ul>
-      <li><span class="ok">✓</span> OpenAI / Gemini 页面直接切换</li>
-      <li><span class="ok">✓</span> 同一截图 + 同一 KiCad 上下文 A/B 测试</li>
-      <li><span class="ok">✓</span> 两个 Provider 都支持视觉分析</li>
-      <li><span class="ok">✓</span> 语音转写跟随当前 Provider</li>
-      <li><span class="ok">✓</span> 自动唤醒跟随当前 Provider</li>
-      <li><span class="ok">✓</span> Gemini 模式可使用浏览器本地 TTS；OpenAI 可选云 TTS</li>
+      <li><span class="ok">✓</span> 原始 4K 视频帧保留用于局部裁切</li>
+      <li><span class="ok">✓</span> 绿色取景框作为 PCB ROI</li>
+      <li><span class="ok">✓</span> 整板 Overview + 6 个重叠高清 Tile</li>
+      <li><span class="ok">✓</span> 丝印 / 芯片顶标 / 接口 / 频率优先读取</li>
+      <li><span class="ok">✓</span> 型号候选 + 置信度，而不是看不清就全部省略</li>
+      <li><span class="ok">✓</span> OpenAI / Gemini 双 Provider</li>
+      <li><span class="ok">✓</span> 可与 KiCad 工程上下文交叉核对</li>
     </ul>
   </div>
 </section>
 </main>
 
-<footer>LabSight EVT0.4 · OpenAI + Gemini · Vercel stateless build</footer>
+<footer>LabSight EVT0.5 · PCB Deep Vision · OpenAI + Gemini · Vercel stateless build</footer>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="/app.js"></script>
 </body>
