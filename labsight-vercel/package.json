@@ -1,0 +1,11 @@
+{
+  "name": "labsight-vercel",
+  "version": "0.2.1",
+  "private": true,
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
