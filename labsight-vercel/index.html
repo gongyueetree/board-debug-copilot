@@ -6,17 +6,19 @@
   <meta name="theme-color" content="#0b0f14" />
   <title>LabSight Vision Debugger · Vercel EVT0</title>
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/wake.css" />
 </head>
 <body>
   <header class="topbar">
     <div class="brand">
       <div class="brandmark">LS</div>
-      <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · Vercel EVT0.2</div></div>
+      <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · Vercel EVT0.3</div></div>
     </div>
     <div class="statusrow">
       <span id="apiStatus" class="pill neutral">AI 检查中…</span>
       <span id="cameraStatus" class="pill neutral">Camera 未连接</span>
       <span id="projectStatus" class="pill neutral">KiCad 未加载</span>
+      <span id="micStatus" class="pill neutral">Mic 未连接</span>
     </div>
   </header>
 
@@ -24,7 +26,7 @@
     <section class="leftcol">
       <div class="panel camera-panel">
         <div class="panelhead">
-          <div><h2>实时视觉</h2><p>浏览器直接读取 Insta360 Link 2C / UVC 摄像头。HTTPS 下可直接授权，不依赖 Link Controller 截图。</p></div>
+          <div><h2>实时视觉</h2><p>浏览器直接读取 Insta360 Link 2C / UVC 摄像头和麦克风。HTTPS 下可直接授权，不依赖 Link Controller 截图。</p></div>
           <div class="scene-tabs" role="tablist">
             <button class="scene active" data-scene="pcb">PCB</button>
             <button class="scene" data-scene="scope">示波器</button>
@@ -52,6 +54,7 @@
           <button id="analyzeBtn" class="primary big">✦ 分析当前画面</button>
           <label class="toggle"><input id="autoSpeak" type="checkbox" checked><span>自动语音回答</span></label>
           <label class="toggle"><input id="cloudTts" type="checkbox"><span>高质量 TTS</span></label>
+          <label class="toggle wake-toggle"><input id="wakeToggle" type="checkbox" checked><span>自动唤醒</span></label>
         </div>
         <div class="capture-preview-wrap"><img id="capturePreview" alt="最近截图" /><div class="capture-meta" id="captureMeta">尚未截图</div></div>
       </div>
@@ -70,12 +73,12 @@
       <div class="panel assistant-panel">
         <div class="assistant-head">
           <div class="avatar">AI</div>
-          <div><h2>LabSight 调试助手</h2><p>画面 + KiCad + 语音问题 → 下一步调试动作</p></div>
+          <div><h2>LabSight 调试助手</h2><p>画面 + KiCad + Link 2C 语音 → 下一步调试动作</p></div>
           <button id="clearChat" class="iconbtn" title="清空对话">↺</button>
         </div>
 
         <div id="chat" class="chat">
-          <div class="message assistant"><div class="bubble">我可以观察当前摄像头画面，并结合上传的 KiCad 工程回答。\n\n例如：\n“这块板子的 3V3 电源应该先测哪里？”\n“示波器上的信号频率和 Vpp 是多少？”\n“我现在红表笔放的位置对吗？”</div></div>
+          <div class="message assistant"><div class="bubble">我可以观察当前摄像头画面，并结合上传的 KiCad 工程回答。\n\n连接 Link 2C 后可以直接说 “LabSight” 唤醒我；唤醒后 60 秒内无需重复唤醒词，可以连续提问。\n\n例如：\n“LabSight，这个示波器上的信号频率是多少？”\n“下一步应该测哪里？”\n“我现在红表笔放的位置对吗？”</div></div>
         </div>
 
         <div class="quickprompts">
@@ -85,12 +88,17 @@
         </div>
 
         <div class="composer">
-          <textarea id="question" rows="3" placeholder="输入问题，或点击麦克风说话…"></textarea>
+          <textarea id="question" rows="3" placeholder="输入问题，或直接对 Link 2C 说 “LabSight”…"></textarea>
           <div class="composer-actions">
             <button id="voiceBtn" class="voicebtn" title="点击开始/停止录音">🎙 <span>语音提问</span></button>
             <button id="sendBtn" class="primary send">发送 + 看当前画面</button>
           </div>
           <div id="recordingState" class="recording-state"></div>
+          <div class="wakebar">
+            <div><strong>语音助手</strong><span id="wakeStatus">连接 Link 2C 后，自动监听 “LabSight”</span></div>
+            <span id="wakeSession" class="wake-session">待唤醒</span>
+          </div>
+          <div class="privacy-note">当前 EVT0.3 为云端唤醒原型：自动唤醒开启后，会把约 4 秒的 Link 2C 麦克风音频片段发送到语音转写接口来识别唤醒词。AI 播报时会暂停监听，避免回声自唤醒。后续版本可替换为本地 Wake Word。</div>
         </div>
       </div>
 
@@ -101,15 +109,17 @@
           <li><span class="ok">✓</span> 4K 预览，AI 帧自动压缩到 ≤2048px</li>
           <li><span class="ok">✓</span> KiCad ZIP 浏览器端解析，不经过 Serverless 文件上传</li>
           <li><span class="ok">✓</span> PCB / 示波器 / 仪器三种视觉策略</li>
-          <li><span class="ok">✓</span> 麦克风录音 → 转写 → 当前画面分析</li>
+          <li><span class="ok">✓</span> Link 2C 麦克风自动监听 “LabSight” 唤醒词</li>
+          <li><span class="ok">✓</span> 唤醒后 60 秒连续语音对话，问题自动抓当前画面</li>
+          <li><span class="ok">✓</span> 手动麦克风录音 → 转写 → 当前画面分析</li>
           <li><span class="ok">✓</span> AI 回答 → 浏览器语音 / OpenAI TTS</li>
-          <li><span class="next">→</span> 下一版：Realtime 双向语音、自动稳帧、ROI、器件框选、SCPI</li>
+          <li><span class="next">→</span> 下一版：本地 Wake Word / Realtime 双向语音、自动稳帧、ROI、器件框选、SCPI</li>
         </ul>
       </div>
     </section>
   </main>
 
-  <footer>LabSight EVT0.2 · Stateless Vercel build · KiCad is parsed locally in the browser.</footer>
+  <footer>LabSight EVT0.3 · Link 2C Voice Wake · 60s continuous conversation · Stateless Vercel build.</footer>
   <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <script src="/app.js"></script>
 </body>
