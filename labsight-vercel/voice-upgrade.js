@@ -96,8 +96,51 @@
     const url=URL.createObjectURL(blob);
     if(state.speakingAudio) state.speakingAudio.pause();
     const audio=new Audio(url); state.speakingAudio=audio;
+    audio.playbackRate=1.08;
     await new Promise((resolve,reject)=>{audio.onended=resolve;audio.onerror=reject;audio.play().catch(reject);});
     URL.revokeObjectURL(url);
+  };
+
+  const splitTtsChunks = (text) => {
+    const normalized=String(text||'').replace(/\s+/g,' ').trim();
+    if(!normalized) return [];
+    const sentences=normalized.match(/[^。！？；.!?]+[。！？；.!?]?/g)||[normalized];
+    const chunks=[];
+    let current='';
+    const target=90, hardMax=150;
+    for(const sentence of sentences){
+      const s=sentence.trim(); if(!s)continue;
+      if(!current){current=s;continue;}
+      if((current+s).length<=target){current+=s;continue;}
+      chunks.push(current);
+      current=s;
+      while(current.length>hardMax){chunks.push(current.slice(0,hardMax));current=current.slice(hardMax);}
+    }
+    if(current)chunks.push(current);
+    return chunks.slice(0,18);
+  };
+
+  const fetchTtsBlob = async (url,text) => {
+    const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})});
+    if(!r.ok){let msg='TTS 失败';try{msg=(await r.json()).detail||msg;}catch{}throw new Error(msg);}
+    return r.blob();
+  };
+
+  const playCloudChunks = async (url,text) => {
+    const chunks=splitTtsChunks(text);
+    if(!chunks.length)return;
+    // 首段尽量短：先开始说，再后台预生成下一段，降低“文字出来后等很久”的感觉。
+    if(chunks[0].length>70){
+      const first=chunks[0], cut=Math.max(first.lastIndexOf('，',70),first.lastIndexOf(',',70));
+      const at=cut>24?cut+1:70;
+      chunks.splice(0,1,first.slice(0,at),first.slice(at));
+    }
+    let nextPromise=fetchTtsBlob(url,chunks[0]);
+    for(let i=0;i<chunks.length;i++){
+      const blob=await nextPromise;
+      nextPromise=i+1<chunks.length?fetchTtsBlob(url,chunks[i+1]):null;
+      await playBlob(blob);
+    }
   };
 
   const browserNaturalSpeech = async (text) => {
@@ -107,16 +150,13 @@
     const zh = voices.find(v=>/zh-CN|cmn-CN/i.test(v.lang) && /ting|xiaoxiao|huihui|meijia|sinji|natural|premium/i.test(v.name))
       || voices.find(v=>/zh-CN|cmn-CN/i.test(v.lang))
       || voices.find(v=>/^zh/i.test(v.lang));
-    const chunks=text.split(/(?<=[。！？；])\s*/).filter(Boolean).reduce((acc,s)=>{
-      if(!acc.length || acc[acc.length-1].length+s.length>150) acc.push(s); else acc[acc.length-1]+=s;
-      return acc;
-    },[]);
+    const chunks=splitTtsChunks(text);
     synth.cancel();
     for(const chunk of chunks){
       await new Promise(resolve=>{
         const u=new SpeechSynthesisUtterance(chunk);
         u.lang='zh-CN'; if(zh)u.voice=zh;
-        u.rate=.98; u.pitch=1.02; u.volume=1;
+        u.rate=1.08; u.pitch=1.03; u.volume=1;
         u.onend=resolve;u.onerror=resolve;synth.speak(u);
       });
     }
@@ -125,27 +165,27 @@
   speakAnswer = async function(text){
     const clean=plainForSpeech(text); if(!clean)return;
     state.listeningSuspended=true; stopWakeListening();
+    const started=performance.now();
+    if(els.recordingState)els.recordingState.textContent='AI 已回答 · 正在准备语音…';
     try{
       if(els.cloudTts.checked && state.provider==='gemini' && state.health?.providers?.gemini?.configured){
-        const r=await fetch('/api/gemini_speech',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:clean})});
-        if(!r.ok)throw new Error((await r.json()).detail||'Gemini TTS 失败');
-        await playBlob(await r.blob());
+        await playCloudChunks('/api/gemini_speech',clean);
       }else if(els.cloudTts.checked && state.health?.providers?.openai?.configured){
-        const r=await fetch('/api/speech',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:clean})});
-        if(!r.ok)throw new Error((await r.json()).detail||'OpenAI TTS 失败');
-        await playBlob(await r.blob());
+        await playCloudChunks('/api/speech',clean);
       }else{
         await browserNaturalSpeech(clean);
       }
+      if(els.recordingState)els.recordingState.textContent='';
+      console.debug(`TTS total ${Math.round(performance.now()-started)}ms`);
     }catch(e){
       console.warn('natural TTS fallback:',e);
+      if(els.recordingState)els.recordingState.textContent='云端语音较慢，已切换本地语音';
       await browserNaturalSpeech(clean);
     }finally{
-      setTimeout(()=>{state.listeningSuspended=false;if(els.wakeToggle.checked)startWakeListening();},650);
+      setTimeout(()=>{state.listeningSuspended=false;if(els.wakeToggle.checked)startWakeListening();},500);
     }
   };
 
-  // UI cleanup / defaults.
   document.querySelector('.checklist-panel')?.remove();
   const ttsLabel=els.cloudTts?.closest('label')?.querySelector('span');
   if(ttsLabel) ttsLabel.textContent='自然语音';
