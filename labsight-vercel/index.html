@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="theme-color" content="#0b0f14" />
+  <title>LabSight Vision Debugger · Vercel EVT0</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brandmark">LS</div>
+      <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · Vercel EVT0.2</div></div>
+    </div>
+    <div class="statusrow">
+      <span id="apiStatus" class="pill neutral">AI 检查中…</span>
+      <span id="cameraStatus" class="pill neutral">Camera 未连接</span>
+      <span id="projectStatus" class="pill neutral">KiCad 未加载</span>
+    </div>
+  </header>
+
+  <main class="layout">
+    <section class="leftcol">
+      <div class="panel camera-panel">
+        <div class="panelhead">
+          <div><h2>实时视觉</h2><p>浏览器直接读取 Insta360 Link 2C / UVC 摄像头。HTTPS 下可直接授权，不依赖 Link Controller 截图。</p></div>
+          <div class="scene-tabs" role="tablist">
+            <button class="scene active" data-scene="pcb">PCB</button>
+            <button class="scene" data-scene="scope">示波器</button>
+            <button class="scene" data-scene="instrument">仪器</button>
+          </div>
+        </div>
+
+        <div class="camera-toolbar">
+          <select id="cameraSelect" aria-label="摄像头"></select>
+          <select id="micSelect" aria-label="麦克风"></select>
+          <button id="refreshDevices" class="secondary">刷新设备</button>
+          <button id="startCamera" class="primary">连接摄像头</button>
+        </div>
+
+        <div class="viewer" id="viewer">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="captureCanvas"></canvas>
+          <div id="focusGuide" class="focus-guide"><span>把 PCB / 波形主体放在框内</span></div>
+          <div class="viewer-badge" id="viewerBadge">LIVE</div>
+          <div class="viewer-empty" id="viewerEmpty"><div class="camera-icon">◉</div><strong>连接 Insta360 Link 2C</strong><span>浏览器会请求摄像头与麦克风权限</span></div>
+        </div>
+
+        <div class="capturebar">
+          <button id="captureBtn" class="secondary big">📷 抓取当前帧</button>
+          <button id="analyzeBtn" class="primary big">✦ 分析当前画面</button>
+          <label class="toggle"><input id="autoSpeak" type="checkbox" checked><span>自动语音回答</span></label>
+          <label class="toggle"><input id="cloudTts" type="checkbox"><span>高质量 TTS</span></label>
+        </div>
+        <div class="capture-preview-wrap"><img id="capturePreview" alt="最近截图" /><div class="capture-meta" id="captureMeta">尚未截图</div></div>
+      </div>
+
+      <div class="panel project-panel">
+        <div class="panelhead compact"><div><h2>KiCad 工程上下文</h2><p>ZIP 在浏览器本地解析，不上传完整工程到 Vercel；仅把有限的工程文本上下文随当前 AI 问题发送。</p></div></div>
+        <div id="dropzone" class="dropzone">
+          <input id="projectFile" type="file" accept=".zip" />
+          <div class="drop-icon">⇧</div><strong>上传 KiCad 工程 ZIP</strong><span>建议直接压缩整个工程目录 · 支持 KiCad 6–10 文本格式</span>
+        </div>
+        <div id="projectSummary" class="project-summary hidden"></div>
+      </div>
+    </section>
+
+    <section class="rightcol">
+      <div class="panel assistant-panel">
+        <div class="assistant-head">
+          <div class="avatar">AI</div>
+          <div><h2>LabSight 调试助手</h2><p>画面 + KiCad + 语音问题 → 下一步调试动作</p></div>
+          <button id="clearChat" class="iconbtn" title="清空对话">↺</button>
+        </div>
+
+        <div id="chat" class="chat">
+          <div class="message assistant"><div class="bubble">我可以观察当前摄像头画面，并结合上传的 KiCad 工程回答。\n\n例如：\n“这块板子的 3V3 电源应该先测哪里？”\n“示波器上的信号频率和 Vpp 是多少？”\n“我现在红表笔放的位置对吗？”</div></div>
+        </div>
+
+        <div class="quickprompts">
+          <button data-prompt="先识别当前画面里最重要的器件/仪器状态，并告诉我下一步应该检查什么。">先看一下现在的状态</button>
+          <button data-prompt="如果这是 PCB，请结合 KiCad 工程找出最应该先测的电源节点和测试点。">找电源测试点</button>
+          <button data-prompt="如果这是示波器画面，请读取能确认的频率、周期、Vpp、偏置、占空比以及时基和垂直档位。">读取示波器参数</button>
+        </div>
+
+        <div class="composer">
+          <textarea id="question" rows="3" placeholder="输入问题，或点击麦克风说话…"></textarea>
+          <div class="composer-actions">
+            <button id="voiceBtn" class="voicebtn" title="点击开始/停止录音">🎙 <span>语音提问</span></button>
+            <button id="sendBtn" class="primary send">发送 + 看当前画面</button>
+          </div>
+          <div id="recordingState" class="recording-state"></div>
+        </div>
+      </div>
+
+      <div class="panel checklist-panel">
+        <h3>Vercel 原型能力</h3>
+        <ul>
+          <li><span class="ok">✓</span> Link 2C / UVC 实时视频</li>
+          <li><span class="ok">✓</span> 4K 预览，AI 帧自动压缩到 ≤2048px</li>
+          <li><span class="ok">✓</span> KiCad ZIP 浏览器端解析，不经过 Serverless 文件上传</li>
+          <li><span class="ok">✓</span> PCB / 示波器 / 仪器三种视觉策略</li>
+          <li><span class="ok">✓</span> 麦克风录音 → 转写 → 当前画面分析</li>
+          <li><span class="ok">✓</span> AI 回答 → 浏览器语音 / OpenAI TTS</li>
+          <li><span class="next">→</span> 下一版：Realtime 双向语音、自动稳帧、ROI、器件框选、SCPI</li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer>LabSight EVT0.2 · Stateless Vercel build · KiCad is parsed locally in the browser.</footer>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
