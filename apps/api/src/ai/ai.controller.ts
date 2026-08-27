@@ -10,10 +10,14 @@ import {
 } from '@app/contracts'
 import { z } from 'zod'
 import { AiService } from './ai.service'
+import { AssemblyInspectionService } from './assembly-inspection.service'
 
 @Controller('ai')
 export class AiController {
-  constructor(private readonly ai: AiService) {}
+  constructor(
+    private readonly ai: AiService,
+    private readonly assembly: AssemblyInspectionService,
+  ) {}
 
   @Post('design-review')
   async designReview(@Body() body: unknown): Promise<DesignReview> {
@@ -37,6 +41,16 @@ export class AiController {
       .object({ photoId: z.string(), persist: z.boolean().optional() })
       .parse(body)
     return VisualFindingsSchema.parse(await this.ai.analyzePhoto(photoId, persist ?? true))
+  }
+
+  /**
+   * P1 装配检查独立端点：不改变原 analyze-photo 行为，避免影响已验证测试链路。
+   * 依据 .kicad_pcb footprint/pad 分组，只回答漏装与无法确认项。
+   */
+  @Post('assembly-inspect')
+  async assemblyInspect(@Body() body: unknown) {
+    const { photoId } = z.object({ photoId: z.string().min(1) }).parse(body)
+    return this.assembly.inspect(photoId)
   }
 
   @Post('measure-guide')
