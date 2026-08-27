@@ -33,7 +33,7 @@
     <div class="panelhead">
       <div>
         <h2>实时视觉</h2>
-        <p>支持 Insta360 Link 系列 UVC 摄像头与 Seeed reCamera Pro Wi‑Fi 摄像头。Deep Vision 会从原始高清帧生成整板图与多个局部 Tile。</p>
+        <p>支持 Insta360 Link 系列 UVC 摄像头与 Seeed reCamera Pro Wi‑Fi 摄像头。reCamera 后台服务安装一次后自动随系统启动。</p>
       </div>
       <div class="scene-tabs" role="tablist">
         <button class="scene active" data-scene="pcb">PCB</button>
@@ -70,7 +70,7 @@
       <div class="viewer-badge" id="viewerBadge">LIVE</div>
       <div class="viewer-empty" id="viewerEmpty">
         <div class="camera-icon">◉</div><strong>连接摄像头</strong>
-        <span>USB/UVC 可直接连接；reCamera Pro 通过 Wi‑Fi + 本地 Bridge 连接</span>
+        <span>USB/UVC 可直接连接；reCamera Pro 通过 Wi‑Fi 自动接入后台服务</span>
       </div>
     </div>
 
@@ -145,7 +145,7 @@ EVT0.8 新增 Agora 实时语音模式，可与原有 Legacy Voice 做 A/B 测�
 <script src="/deepvision-ui.js?v=0.5.4"></script>
 <script src="/voice-upgrade.js?v=0.5.5"></script>
 <script src="/realtime-voice.js?v=0.6.1"></script>
-<script src="/camera-adapters.js?v=0.7.0"></script>
+<script src="/camera-adapters.js?v=0.8.0"></script>
 <script src="/agora-voice-adapter.js?v=0.8.2"></script>
 <script src="/assembly-inspection.js?v=0.8.3"></script>
 </body>
