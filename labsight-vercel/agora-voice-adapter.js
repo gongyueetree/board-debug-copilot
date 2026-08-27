@@ -10,6 +10,7 @@
   let session = null;
   let starting = false;
   let active = false;
+  let savedAutoSpeak = null;
 
   const bar = document.querySelector('.wakebar');
   if (!bar) return;
@@ -49,6 +50,11 @@
     }
     const span = els.voiceBtn?.querySelector('span');
     if (span && !active) span.textContent = agoraMode ? '启动实时对话' : '语音提问';
+    if (agoraMode && state.health?.agora?.configured === false) {
+      setAgoraState('Agora 未配置', 'warn');
+    } else if (!active && !starting) {
+      setAgoraState('Agora 待机', 'neutral');
+    }
     localStorage.setItem('labsight-voice-mode', modeSelect.value);
   };
 
@@ -62,6 +68,14 @@
     micTrack = null;
     try { await client?.leave(); } catch {}
     client = null;
+  };
+
+  const restoreLegacyAudio = () => {
+    if (savedAutoSpeak !== null && els.autoSpeak) {
+      els.autoSpeak.checked = savedAutoSpeak;
+      els.autoSpeak.disabled = false;
+    }
+    savedAutoSpeak = null;
   };
 
   const stopAgora = async (userInitiated=true) => {
@@ -85,6 +99,7 @@
     }
     session = null;
     state.listeningSuspended = false;
+    restoreLegacyAudio();
     sessionBtn.textContent = '启动 Agora 对话';
     els.voiceBtn?.classList.remove('speaking', 'recording', 'agora-live');
     const span = els.voiceBtn?.querySelector('span');
@@ -95,10 +110,24 @@
 
   const startAgora = async () => {
     if (starting || active) return;
+    if (state.health?.agora?.configured === false) {
+      const missing = state.health.agora.missing || [];
+      const msg = missing.length ? `缺少：${missing.join('、')}` : '请先配置 Agora 凭据';
+      setAgoraState('Agora 未配置', 'warn');
+      if (els.recordingState) els.recordingState.textContent = msg;
+      addMessage('assistant', `Agora 实时语音尚未配置。${msg}`);
+      return;
+    }
+
     starting = true;
     state.listeningSuspended = true;
     try { stopWakeListening(); } catch {}
     try { window.cancelLabSightSpeech?.(false); } catch {}
+    if (els.autoSpeak) {
+      savedAutoSpeak = els.autoSpeak.checked;
+      els.autoSpeak.checked = false;
+      els.autoSpeak.disabled = true;
+    }
     setAgoraState('正在创建会话…', 'warn');
     sessionBtn.disabled = true;
     if (els.recordingState) els.recordingState.textContent = '正在启动 Agora 实时语音…';
@@ -139,7 +168,9 @@
       });
 
       await client.join(d.app_id, d.channel, d.rtc_token, d.uid);
+      const selectedMic = els.micSelect?.value || undefined;
       micTrack = await Agora.createMicrophoneAudioTrack({
+        microphoneId: selectedMic,
         AEC: true,
         AGC: true,
         ANS: true,
@@ -163,6 +194,7 @@
       active = false;
       starting = false;
       state.listeningSuspended = false;
+      restoreLegacyAudio();
       setAgoraState('启动失败', 'warn');
       if (els.recordingState) els.recordingState.textContent = `Agora 启动失败：${e.message}`;
       addMessage('assistant', `Agora 实时语音启动失败：${e.message}`);
@@ -200,6 +232,9 @@
     }
   });
 
+  // Health loads asynchronously in app.js; refresh the status once it is likely available.
+  setTimeout(applyModeUi, 800);
+  setTimeout(applyModeUi, 2000);
   modeSelect.value = localStorage.getItem('labsight-voice-mode') || 'legacy';
   applyModeUi();
 })();
