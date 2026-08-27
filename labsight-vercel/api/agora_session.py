@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from agora_token_builder import RtcTokenBuilder
 
-app = FastAPI(title="LabSight Agora Voice Adapter", version="0.8.0")
+app = FastAPI(title="LabSight Agora Voice Adapter", version="0.8.1")
 
 
 class AgoraSessionRequest(BaseModel):
@@ -49,6 +49,15 @@ def _rtc_token(app_id: str, app_cert: str, channel: str, uid: int, ttl: int = 36
     )
 
 
+def _llm_params(model: str) -> dict[str, Any]:
+    return {
+        "model": model,
+        "stream": True,
+        "temperature": float(os.getenv("AGORA_LLM_TEMPERATURE", "0.35")),
+        "max_tokens": int(os.getenv("AGORA_LLM_MAX_TOKENS", "220")),
+    }
+
+
 def _build_llm_block() -> dict[str, Any]:
     custom_url = os.getenv("AGORA_CUSTOM_LLM_URL", "").strip()
     if custom_url:
@@ -71,7 +80,7 @@ def _build_llm_block() -> dict[str, Any]:
             "greeting_message": "LabSight 实时语音已连接，我在听。",
             "failure_message": "这个问题我暂时没有判断清楚，可以换一种说法或结合当前画面再试一次。",
             "max_history": 12,
-            "params": {"model": os.getenv("AGORA_CUSTOM_LLM_MODEL", "labsight")},
+            "params": _llm_params(os.getenv("AGORA_CUSTOM_LLM_MODEL", "labsight")),
         }
 
     return {
@@ -85,38 +94,44 @@ def _build_llm_block() -> dict[str, Any]:
                 "content": (
                     "你是 LabSight 实时语音调试助手。始终用简体中文自然、简洁地回答。"
                     "面向电子研发工程师，不要长篇播报。器件型号、引脚和单位保持原样。"
+                    "回答优先控制在 2~5 句话，先给结论，再给下一步。"
                 ),
             }
         ],
         "greeting_message": "LabSight 实时语音已连接，我在听。",
         "failure_message": "这个问题我暂时没有判断清楚，请再说一次。",
         "max_history": 12,
-        "params": {"model": os.getenv("AGORA_LLM_MODEL", "gpt-4o-mini")},
+        "params": _llm_params(os.getenv("AGORA_LLM_MODEL", "gpt-4o-mini")),
     }
 
 
 def _build_tts_block() -> dict[str, Any]:
     vendor = os.getenv("AGORA_TTS_VENDOR", "minimax").strip().lower()
     if vendor == "openai":
+        # Agora managed mode currently lists OpenAI tts-1 as supported.
         return {
             "credential_mode": "managed",
             "vendor": "openai",
             "params": {
                 "url": "https://api.openai.com/v1/audio/speech",
-                "model": os.getenv("AGORA_TTS_MODEL", "gpt-4o-mini-tts"),
-                "voice": os.getenv("AGORA_TTS_VOICE", "marin"),
+                "model": os.getenv("AGORA_TTS_MODEL", "tts-1"),
+                "voice": os.getenv("AGORA_TTS_VOICE", "alloy"),
             },
         }
 
-    voice_id = os.getenv("AGORA_TTS_VOICE_ID", "Chinese (Mandarin)_Gentleman")
+    params: dict[str, Any] = {
+        "url": "wss://api.minimax.io/ws/v1/t2a_v2",
+        "model": os.getenv("AGORA_TTS_MODEL", "speech-2.6-turbo"),
+    }
+    # Voice IDs vary by account/model catalog. Omit the override unless explicitly set,
+    # so a stale or invalid ID cannot prevent the agent from starting.
+    voice_id = os.getenv("AGORA_TTS_VOICE_ID", "").strip()
+    if voice_id:
+        params["voice_setting"] = {"voice_id": voice_id}
     return {
         "credential_mode": "managed",
         "vendor": "minimax",
-        "params": {
-            "url": "wss://api.minimax.io/ws/v1/t2a_v2",
-            "model": os.getenv("AGORA_TTS_MODEL", "speech-2.6-turbo"),
-            "voice_setting": {"voice_id": voice_id},
-        },
+        "params": params,
     }
 
 
