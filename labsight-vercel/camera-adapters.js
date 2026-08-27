@@ -1,24 +1,27 @@
 (() => {
-  // LabSight Camera Adapters EVT0.7
+  // LabSight Camera Adapters EVT0.8
   // - UVC/Insta360: request 4K and enable continuous autofocus when the browser exposes UVC focus controls.
-  // - Seeed reCamera Pro: consume frames from a local LabSight reCamera Bridge and expose them as a MediaStream,
-  //   so the existing capture / AI / Deep Vision pipeline continues to work unchanged.
+  // - Seeed reCamera Pro: use the auto-start LabSight background bridge on localhost.
+  //   After one-time installation on macOS it starts at login, so the user no longer launches Python manually.
 
   let remoteRun = 0;
   let remoteCanvas = null;
   let remoteTimer = null;
   let remoteMicStream = null;
+  const BRIDGE_BASE = 'http://127.0.0.1:8765';
 
   const style = document.createElement('style');
   style.textContent = `
-    .camera-source-select{min-width:170px}
-    .camera-adapter-panel{display:none;grid-template-columns:1.1fr 1fr 1fr 1fr;gap:8px;margin-top:10px;padding:10px;border:1px solid rgba(86,220,190,.20);border-radius:10px;background:rgba(8,20,27,.50)}
+    .camera-source-select{min-width:190px}
+    .camera-adapter-panel{display:none;grid-template-columns:1.2fr 1fr 1fr;gap:8px;margin-top:10px;padding:10px;border:1px solid rgba(86,220,190,.20);border-radius:10px;background:rgba(8,20,27,.50)}
     .camera-adapter-panel.show{display:grid}
     .camera-adapter-panel label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#8ea6b5}
     .camera-adapter-panel input{min-width:0;padding:8px 9px;border-radius:8px;border:1px solid rgba(126,160,177,.26);background:#09131b;color:#dbe8ef}
     .camera-adapter-help{grid-column:1/-1;font-size:11px;color:#829aa9;line-height:1.45}
     .camera-focus-pill{white-space:nowrap}
-    @media(max-width:900px){.camera-adapter-panel{grid-template-columns:1fr 1fr}}
+    .bridge-ok{color:#6fe5b0}
+    .bridge-warn{color:#ffcb73}
+    @media(max-width:900px){.camera-adapter-panel{grid-template-columns:1fr 1fr}.camera-adapter-help{grid-column:1/-1}}
   `;
   document.head.appendChild(style);
 
@@ -39,8 +42,7 @@
     <label>reCamera Pro IP<input id="recameraIp" value="${localStorage.getItem('labsight-recamera-ip') || '192.168.42.1'}" placeholder="192.168.1.100"></label>
     <label>用户名<input id="recameraUser" value="${localStorage.getItem('labsight-recamera-user') || 'admin'}" autocomplete="username"></label>
     <label>密码<input id="recameraPassword" type="password" value="" autocomplete="current-password" placeholder="设备登录密码"></label>
-    <label>本地 Bridge<input id="recameraBridge" value="${localStorage.getItem('labsight-recamera-bridge') || 'http://127.0.0.1:8765'}" placeholder="http://127.0.0.1:8765"></label>
-    <div class="camera-adapter-help">reCamera Pro 通过 Wi‑Fi 输出 RTSP；浏览器不能直接播放 RTSP，因此 LabSight 使用本地 reCamera Bridge 转换为浏览器可用帧。语音输入仍使用上方选择的本机/USB 麦克风。</div>`;
+    <div class="camera-adapter-help"><span id="recameraBridgeState">正在检测 LabSight 摄像头服务…</span>　reCamera Pro 通过 Wi‑Fi/RTSP 接入；后台转换服务安装一次后会随 Mac 登录自动启动，不再需要手动运行 Python。</div>`;
   toolbar.insertAdjacentElement('afterend', panel);
 
   const focusPill = document.createElement('span');
@@ -51,7 +53,7 @@
   const ipEl = panel.querySelector('#recameraIp');
   const userEl = panel.querySelector('#recameraUser');
   const passEl = panel.querySelector('#recameraPassword');
-  const bridgeEl = panel.querySelector('#recameraBridge');
+  const bridgeStateEl = panel.querySelector('#recameraBridgeState');
 
   const setFocusPill = (text, kind='neutral') => {
     focusPill.textContent = text;
@@ -65,6 +67,29 @@
     remoteMicStream = null;
   };
 
+  async function bridgeRequest(path, options={}) {
+    const r = await fetch(BRIDGE_BASE + path, { cache:'no-store', ...options });
+    const txt = await r.text();
+    let d = {};
+    try { d = JSON.parse(txt); } catch { throw new Error(`后台服务返回异常 (${r.status})：${txt.slice(0,160)}`); }
+    if (!r.ok || d.ok === false) throw new Error(d.error || d.detail || `后台服务 HTTP ${r.status}`);
+    return d;
+  }
+
+  async function probeBridge(show=true) {
+    try {
+      const d = await bridgeRequest('/health');
+      bridgeStateEl.textContent = d.connected ? '后台服务已就绪 · reCamera 视频已连接' : '后台服务已就绪';
+      bridgeStateEl.className = 'bridge-ok';
+      return true;
+    } catch (e) {
+      bridgeStateEl.textContent = '后台服务尚未安装/启动';
+      bridgeStateEl.className = 'bridge-warn';
+      if (show) console.warn('reCamera background service:', e);
+      return false;
+    }
+  }
+
   async function enableAutofocus(track) {
     if (!track) return;
     const label = track.label || '';
@@ -77,7 +102,6 @@
         setFocusPill(`自动对焦 · ${mode === 'continuous' ? '连续 AF' : mode}`, 'ok');
         return;
       }
-      // Insta360 Link performs autofocus in camera firmware even when the host browser does not expose UVC focusMode.
       if (/insta360|link\s*2|link\s*2c|insta360\s*link/i.test(label)) {
         setFocusPill('自动对焦 · 相机固件管理', 'ok');
         return;
@@ -118,16 +142,6 @@
     }
   }
 
-  async function bridgeJson(path, options={}) {
-    const base = bridgeEl.value.trim().replace(/\/$/, '');
-    const r = await fetch(base + path, { cache:'no-store', ...options });
-    const txt = await r.text();
-    let d = {};
-    try { d = JSON.parse(txt); } catch { throw new Error(`Bridge 返回异常 (${r.status})：${txt.slice(0,160)}`); }
-    if (!r.ok || d.ok === false) throw new Error(d.error || d.detail || `Bridge HTTP ${r.status}`);
-    return d;
-  }
-
   async function configureBridge() {
     const ip = ipEl.value.trim();
     const username = userEl.value.trim() || 'admin';
@@ -135,8 +149,7 @@
     if (!ip) throw new Error('请输入 reCamera Pro IP 地址');
     localStorage.setItem('labsight-recamera-ip', ip);
     localStorage.setItem('labsight-recamera-user', username);
-    localStorage.setItem('labsight-recamera-bridge', bridgeEl.value.trim());
-    return bridgeJson('/configure', {
+    return bridgeRequest('/configure', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body:JSON.stringify({ camera_ip:ip, username, password, rtsp_path:'/live' })
     });
@@ -144,9 +157,8 @@
 
   async function fetchRemoteFrame(runId) {
     if (runId !== remoteRun) return;
-    const base = bridgeEl.value.trim().replace(/\/$/, '');
     try {
-      const r = await fetch(`${base}/frame.jpg?t=${Date.now()}`, { cache:'no-store' });
+      const r = await fetch(`${BRIDGE_BASE}/frame.jpg?t=${Date.now()}`, { cache:'no-store' });
       if (!r.ok) throw new Error(`frame HTTP ${r.status}`);
       const blob = await r.blob();
       const bitmap = await createImageBitmap(blob);
@@ -157,7 +169,7 @@
       }
       remoteCanvas.getContext('2d', {alpha:false}).drawImage(bitmap,0,0);
       bitmap.close();
-      remoteTimer = setTimeout(() => fetchRemoteFrame(runId), 70); // target ~14 fps; bridge/camera may deliver less.
+      remoteTimer = setTimeout(() => fetchRemoteFrame(runId), 70);
     } catch (e) {
       console.warn('reCamera frame:', e);
       if (runId === remoteRun) remoteTimer = setTimeout(() => fetchRemoteFrame(runId), 500);
@@ -171,16 +183,18 @@
     setPill(els.cameraStatus, 'reCamera Pro · 正在连接…', 'neutral');
     setFocusPill('reCamera Pro · M12 镜头对焦', 'neutral');
     try {
+      const ready = await probeBridge(false);
+      if (!ready) {
+        throw new Error('LabSight 摄像头后台服务未就绪。首次只需双击 tools/install-recamera-service.command 安装；以后 Mac 登录后会自动运行。');
+      }
       const cfg = await configureBridge();
-      const base = bridgeEl.value.trim().replace(/\/$/, '');
-      // Wait until the bridge has decoded at least one frame.
       let firstBlob = null;
-      for (let i=0;i<25;i++) {
-        const r = await fetch(`${base}/frame.jpg?t=${Date.now()}`, { cache:'no-store' });
+      for (let i=0;i<30;i++) {
+        const r = await fetch(`${BRIDGE_BASE}/frame.jpg?t=${Date.now()}`, { cache:'no-store' });
         if (r.ok) { firstBlob = await r.blob(); break; }
         await new Promise(r => setTimeout(r, 200));
       }
-      if (!firstBlob) throw new Error('已连接 Bridge，但暂未从 RTSP 收到视频帧');
+      if (!firstBlob) throw new Error('后台服务已连接，但暂未从 reCamera RTSP 收到视频帧，请确认 IP、密码和 RTSP 已启用');
       const bitmap = await createImageBitmap(firstBlob);
       remoteCanvas = document.createElement('canvas');
       remoteCanvas.width = bitmap.width; remoteCanvas.height = bitmap.height;
@@ -198,13 +212,14 @@
       els.video.srcObject = state.stream; await els.video.play();
       const runId = ++remoteRun;
       fetchRemoteFrame(runId);
+      await probeBridge(false);
       setPill(els.cameraStatus, `reCamera Pro · Wi‑Fi/RTSP · ${cfg.width || remoteCanvas.width}×${cfg.height || remoteCanvas.height}`, 'ok');
       setPill(els.micStatus, audioTracks.length ? `Mic · ${audioTracks[0].label || '本机麦克风'}` : 'Mic · 未连接', audioTracks.length?'ok':'warn');
       els.viewerEmpty.classList.add('hidden'); els.viewerBadge.style.display='block'; els.viewerBadge.textContent='reCamera LIVE'; els.startCamera.textContent='重新连接';
       if (els.wakeToggle.checked && audioTracks.length) startWakeListening();
     } catch (e) {
       setPill(els.cameraStatus, 'reCamera Pro 连接失败', 'warn');
-      alert(`reCamera Pro 连接失败：${e.message}\n\n请先运行 tools/recamera_bridge.py，并确认 reCamera Pro 与电脑处于同一网络。`);
+      alert(`reCamera Pro 连接失败：${e.message}`);
     }
   }
 
@@ -214,22 +229,20 @@
     els.cameraSelect.disabled = remote;
     els.refreshDevices.disabled = remote;
     els.startCamera.textContent = remote ? '连接 reCamera Pro' : '连接摄像头';
-    if (!remote) setFocusPill('自动对焦 · 待检测', 'neutral');
+    if (remote) probeBridge(false); else setFocusPill('自动对焦 · 待检测', 'neutral');
   });
 
-  // Capture phase replaces the old direct event listener from app.js without invasive edits.
   els.startCamera.addEventListener('click', async (e) => {
     e.preventDefault(); e.stopImmediatePropagation();
     if (sourceSelect.value === 'recamera') await startReCamera(); else await startUvc();
   }, true);
 
-  // When reCamera is active, the existing capture button can keep using the video's MediaStream.
-  // The frame source is the remote canvas, so captureFrame/buildDeepVisionPack need no special branch.
+  probeBridge(false);
 
-  // Expose adapter diagnostics for console/debugging.
   window.LabSightCameraAdapters = {
     enableAutofocus,
     stopRemote,
+    probeBridge,
     get source(){ return sourceSelect.value; },
     get remoteCanvas(){ return remoteCanvas; }
   };
