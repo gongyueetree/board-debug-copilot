@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from agora_token_builder import RtcTokenBuilder
 
-app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.0")
+app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.1")
 
 API_BASE = "https://api.agora.io/cn/api/conversational-ai-agent/v2/projects"
 
@@ -116,8 +116,6 @@ def _build_llm(provider: str | None) -> dict[str, Any]:
             "params": _llm_params(model),
         }
 
-    # BYOK fallback. Keep this path configurable because Shengwang Playground may provide
-    # a provider-specific request body that can be pasted into environment-backed config later.
     return {
         "vendor": os.getenv("SHENGWANG_LLM_VENDOR", os.getenv("AGORA_LLM_VENDOR", "deepseek")),
         "url": os.getenv("SHENGWANG_LLM_URL", os.getenv("AGORA_LLM_URL", "")),
@@ -134,18 +132,27 @@ def _build_tts() -> dict[str, Any]:
     vendor = os.getenv("SHENGWANG_TTS_VENDOR", os.getenv("AGORA_TTS_VENDOR", "minimax")).strip().lower()
     model = os.getenv("SHENGWANG_TTS_MODEL", os.getenv("AGORA_TTS_MODEL", "speech-2.6-turbo"))
     if vendor == "minimax":
+        key = os.getenv("SHENGWANG_TTS_API_KEY", "").strip()
         params: dict[str, Any] = {
-            "url": os.getenv("SHENGWANG_TTS_URL", "wss://api.minimax.io/ws/v1/t2a_v2"),
+            "key": key,
             "model": model,
+            "voice_setting": {
+                "voice_id": os.getenv("SHENGWANG_TTS_VOICE_ID", "female-shaonv"),
+                "speed": float(os.getenv("SHENGWANG_TTS_SPEED", "1.05")),
+                "vol": 1,
+                "pitch": 0,
+            },
+            "audio_setting": {"sample_rate": int(os.getenv("SHENGWANG_TTS_SAMPLE_RATE", "16000"))},
         }
-        voice_id = os.getenv("SHENGWANG_TTS_VOICE_ID", os.getenv("AGORA_TTS_VOICE_ID", "")).strip()
-        if voice_id:
-            params["voice_setting"] = {"voice_id": voice_id}
+        group_id = os.getenv("SHENGWANG_TTS_GROUP_ID", "").strip()
+        if group_id:
+            params["group_id"] = group_id
         return {"vendor": "minimax", "params": params}
     return {
         "vendor": vendor,
         "params": {
             "url": os.getenv("SHENGWANG_TTS_URL", ""),
+            "key": os.getenv("SHENGWANG_TTS_API_KEY", ""),
             "model": model,
             "voice": os.getenv("SHENGWANG_TTS_VOICE", ""),
         },
@@ -190,6 +197,14 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "remote_rtc_uids": [str(user_uid)],
         "enable_string_uid": False,
         "idle_timeout": int(os.getenv("SHENGWANG_IDLE_TIMEOUT", "180")),
+        "asr": {
+            "language": "zh-CN",
+            "vendor": "fengming",
+            "keywords": [
+                "LabSight", "ezPLM", "KiCad", "PCB", "FPGA", "RP2040", "RP2350", "ADALM2000",
+                "示波器", "逻辑分析仪", "信号发生器", "电源纹波", "焊点", "丝印", "位号",
+            ],
+        },
         "turn_detection": {
             "mode": "default",
             "config": {
@@ -210,10 +225,14 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
                 },
             },
         },
+        "interruption": {
+            "enable": True,
+            "mode": "start_of_speech",
+        },
         "llm": _build_llm(req.provider),
         "tts": _build_tts(),
         "parameters": {
-            "data_channel": "rtc",
+            "data_channel": "datastream",
         },
     }
 
@@ -231,6 +250,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "agent_id": data.get("agent_id"),
         "agent_status": data.get("status", "RUNNING"),
         "turn_detection": {"mode": "semantic", "silence_ms": silence_ms, "max_wait_ms": max_wait_ms},
+        "asr": {"vendor": "fengming", "language": "zh-CN"},
     }
 
 
@@ -238,7 +258,6 @@ def _stop(req: ShengwangSessionRequest) -> dict[str, Any]:
     if not req.agent_id:
         return {"ok": True, "stopped": False, "reason": "missing_agent_id"}
     app_id = _app_id()
-    # Shengwang v2 stop endpoint is leave for the given agent instance.
     response = _request("POST", f"{API_BASE}/{app_id}/agents/{req.agent_id}/leave", json_body={})
     try:
         data = response.json()
