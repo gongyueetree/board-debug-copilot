@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from agora_token_builder import RtcTokenBuilder
 
-app = FastAPI(title="LabSight Agora Voice Adapter", version="0.8.1")
+app = FastAPI(title="LabSight Agora Voice Adapter", version="0.8.2")
 
 
 class AgoraSessionRequest(BaseModel):
@@ -38,15 +38,7 @@ def _basic_auth_header() -> str:
 
 def _rtc_token(app_id: str, app_cert: str, channel: str, uid: int, ttl: int = 3600) -> str:
     expire_ts = int(time.time()) + ttl
-    role_publisher = 1
-    return RtcTokenBuilder.buildTokenWithUid(
-        app_id,
-        app_cert,
-        channel,
-        uid,
-        role_publisher,
-        expire_ts,
-    )
+    return RtcTokenBuilder.buildTokenWithUid(app_id, app_cert, channel, uid, 1, expire_ts)
 
 
 def _llm_params(model: str) -> dict[str, Any]:
@@ -58,15 +50,35 @@ def _llm_params(model: str) -> dict[str, Any]:
     }
 
 
-def _build_llm_block() -> dict[str, Any]:
-    custom_url = os.getenv("AGORA_CUSTOM_LLM_URL", "").strip()
+def _custom_llm_url() -> str:
+    explicit = os.getenv("AGORA_CUSTOM_LLM_URL", "").strip()
+    if explicit:
+        return explicit
+    host = (
+        os.getenv("LABSIGHT_PUBLIC_BASE_URL", "").strip()
+        or os.getenv("VERCEL_URL", "").strip()
+        or os.getenv("VERCEL_PROJECT_PRODUCTION_URL", "").strip()
+    )
+    if not host:
+        return ""
+    if not host.startswith(("http://", "https://")):
+        host = "https://" + host
+    return host.rstrip("/") + "/api/agora_chat"
+
+
+def _custom_llm_key() -> str:
+    return os.getenv("AGORA_CUSTOM_LLM_API_KEY", "").strip() or os.getenv("AGORA_APP_CERTIFICATE", "").strip()
+
+
+def _build_llm_block(provider: str | None) -> dict[str, Any]:
+    custom_url = _custom_llm_url()
     if custom_url:
+        selected = "gemini" if str(provider or "").lower() == "gemini" else "openai"
+        model = os.getenv("AGORA_CUSTOM_LLM_MODEL", "").strip() or selected
+        # Match Agora's documented custom LLM REST shape: url + api_key + OpenAI-style params.
         return {
-            "credential_mode": "byok",
-            "vendor": "custom",
-            "style": "openai",
             "url": custom_url,
-            "api_key": os.getenv("AGORA_CUSTOM_LLM_API_KEY", "labsight-agora"),
+            "api_key": _custom_llm_key(),
             "system_messages": [
                 {
                     "role": "system",
@@ -80,7 +92,7 @@ def _build_llm_block() -> dict[str, Any]:
             "greeting_message": "LabSight 实时语音已连接，我在听。",
             "failure_message": "这个问题我暂时没有判断清楚，可以换一种说法或结合当前画面再试一次。",
             "max_history": 12,
-            "params": _llm_params(os.getenv("AGORA_CUSTOM_LLM_MODEL", "labsight")),
+            "params": _llm_params(model),
         }
 
     return {
@@ -108,7 +120,6 @@ def _build_llm_block() -> dict[str, Any]:
 def _build_tts_block() -> dict[str, Any]:
     vendor = os.getenv("AGORA_TTS_VENDOR", "minimax").strip().lower()
     if vendor == "openai":
-        # Agora managed mode currently lists OpenAI tts-1 as supported.
         return {
             "credential_mode": "managed",
             "vendor": "openai",
@@ -118,21 +129,14 @@ def _build_tts_block() -> dict[str, Any]:
                 "voice": os.getenv("AGORA_TTS_VOICE", "alloy"),
             },
         }
-
     params: dict[str, Any] = {
         "url": "wss://api.minimax.io/ws/v1/t2a_v2",
         "model": os.getenv("AGORA_TTS_MODEL", "speech-2.6-turbo"),
     }
-    # Voice IDs vary by account/model catalog. Omit the override unless explicitly set,
-    # so a stale or invalid ID cannot prevent the agent from starting.
     voice_id = os.getenv("AGORA_TTS_VOICE_ID", "").strip()
     if voice_id:
         params["voice_setting"] = {"voice_id": voice_id}
-    return {
-        "credential_mode": "managed",
-        "vendor": "minimax",
-        "params": params,
-    }
+    return {"credential_mode": "managed", "vendor": "minimax", "params": params}
 
 
 def _start_session(req: AgoraSessionRequest) -> dict[str, Any]:
@@ -145,8 +149,9 @@ def _start_session(req: AgoraSessionRequest) -> dict[str, Any]:
 
     user_token = _rtc_token(app_id, app_cert, channel, user_uid)
     agent_token = _rtc_token(app_id, app_cert, channel, agent_uid)
-
     asr_language = os.getenv("AGORA_ASR_LANGUAGE", "multi")
+
+    llm = _build_llm_block(req.provider)
     properties: dict[str, Any] = {
         "channel": channel,
         "token": agent_token,
@@ -163,14 +168,11 @@ def _start_session(req: AgoraSessionRequest) -> dict[str, Any]:
                 "language": asr_language,
             },
         },
-        "llm": _build_llm_block(),
+        "llm": llm,
         "tts": _build_tts_block(),
     }
 
-    payload = {
-        "name": f"labsight-{uuid.uuid4().hex[:12]}",
-        "properties": properties,
-    }
+    payload = {"name": f"labsight-{uuid.uuid4().hex[:12]}", "properties": properties}
     url = f"https://api.agora.io/api/conversational-ai-agent/v2/projects/{app_id}/join"
     try:
         response = requests.post(
@@ -181,13 +183,11 @@ def _start_session(req: AgoraSessionRequest) -> dict[str, Any]:
         )
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Agora Agent 启动请求失败：{exc}") from exc
-
     if response.status_code >= 400:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Agora Agent 启动失败 {response.status_code}: {response.text[:1800]}",
-        )
+        raise HTTPException(status_code=502, detail=f"Agora Agent 启动失败 {response.status_code}: {response.text[:1800]}")
+
     data = response.json()
+    llm_vendor = "labsight-gateway" if _custom_llm_url() else llm.get("vendor", "managed")
     return {
         "ok": True,
         "mode": "agora_realtime_voice",
@@ -200,7 +200,7 @@ def _start_session(req: AgoraSessionRequest) -> dict[str, Any]:
         "agent_status": data.get("status", "RUNNING"),
         "asr": {"vendor": properties["asr"]["vendor"], "model": properties["asr"]["params"]["model"], "language": asr_language},
         "tts": {"vendor": properties["tts"]["vendor"], "model": properties["tts"]["params"].get("model")},
-        "llm": {"vendor": properties["llm"].get("vendor"), "model": properties["llm"].get("params", {}).get("model")},
+        "llm": {"vendor": llm_vendor, "model": llm.get("params", {}).get("model")},
     }
 
 
