@@ -2,8 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-VENV_DIR="$HOME/.labsight/recamera-bridge-venv"
+VENV_DIR="$HOME/.labsight/recamera-webrtc-venv"
 LOG_DIR="$HOME/Library/Logs/LabSight"
 PLIST="$HOME/Library/LaunchAgents/cn.eetree.labsight.recamera.plist"
 LABEL="cn.eetree.labsight.recamera"
@@ -16,7 +15,7 @@ if [[ ! -x "$PY" ]]; then
   python3 -m venv "$VENV_DIR"
 fi
 
-echo "[LabSight] 安装/更新 reCamera Bridge 依赖…"
+echo "[LabSight] 安装/更新 reCamera WebRTC 依赖…"
 "$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
 "$VENV_DIR/bin/pip" install -r "$SCRIPT_DIR/requirements-recamera-bridge.txt"
 
@@ -29,15 +28,15 @@ cat > "$PLIST" <<EOF
   <key>ProgramArguments</key>
   <array>
     <string>$PY</string>
-    <string>$SCRIPT_DIR/recamera_bridge.py</string>
+    <string>$SCRIPT_DIR/recamera_webrtc_bridge.py</string>
     <string>--host</string><string>127.0.0.1</string>
     <string>--port</string><string>8765</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ProcessType</key><string>Background</string>
-  <key>StandardOutPath</key><string>$LOG_DIR/recamera-bridge.log</string>
-  <key>StandardErrorPath</key><string>$LOG_DIR/recamera-bridge-error.log</string>
+  <key>StandardOutPath</key><string>$LOG_DIR/recamera-webrtc.log</string>
+  <key>StandardErrorPath</key><string>$LOG_DIR/recamera-webrtc-error.log</string>
 </dict>
 </plist>
 EOF
@@ -46,20 +45,20 @@ launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
 launchctl bootstrap "gui/$(id -u)" "$PLIST"
 launchctl kickstart -k "gui/$(id -u)/$LABEL"
 
-for i in {1..20}; do
+for i in {1..30}; do
   if curl -fsS http://127.0.0.1:8765/health >/dev/null 2>&1; then
     echo ""
-    echo "✅ LabSight reCamera 后台服务已安装并启动。"
+    echo "✅ LabSight reCamera WebRTC 后台服务已安装并启动。"
     echo "以后登录 Mac 会自动运行，不需要再启动 Python。"
     echo "健康检查：http://127.0.0.1:8765/health"
     echo ""
     read "?按回车关闭…"
     exit 0
   fi
-  sleep 0.3
+  sleep 0.4
 done
 
 echo ""
 echo "⚠️ 服务已安装，但健康检查暂未通过。"
-echo "查看日志：$LOG_DIR/recamera-bridge-error.log"
+echo "查看日志：$LOG_DIR/recamera-webrtc-error.log"
 read "?按回车关闭…"
