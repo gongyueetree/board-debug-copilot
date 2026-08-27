@@ -4,17 +4,23 @@ import os
 import time
 
 
+def _has(*names):
+    return any(bool(os.getenv(name)) for name in names)
+
+
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
         openai_key = bool(os.getenv("OPENAI_API_KEY"))
         gemini_key = bool(os.getenv("GEMINI_API_KEY"))
-        agora_required = [
-            "AGORA_APP_ID",
-            "AGORA_APP_CERTIFICATE",
-            "AGORA_CUSTOMER_ID",
-            "AGORA_CUSTOMER_SECRET",
+
+        shengwang_checks = [
+            ("SHENGWANG_APP_ID", "AGORA_APP_ID"),
+            ("SHENGWANG_APP_CERTIFICATE", "AGORA_APP_CERTIFICATE"),
+            ("SHENGWANG_CUSTOMER_ID", "AGORA_CUSTOMER_ID"),
+            ("SHENGWANG_CUSTOMER_SECRET", "AGORA_CUSTOMER_SECRET"),
         ]
-        agora_missing = [name for name in agora_required if not os.getenv(name)]
+        shengwang_missing = [a for a, b in shengwang_checks if not _has(a, b)]
+
         payload = {
             "ok": True,
             "ai": openai_key or gemini_key,
@@ -30,12 +36,14 @@ class handler(BaseHTTPRequestHandler):
                     "audio_model": os.getenv("GEMINI_AUDIO_MODEL", os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")),
                 },
             },
-            "agora": {
-                "configured": not agora_missing,
-                "missing": agora_missing,
-                "asr_model": os.getenv("AGORA_ASR_MODEL", "nova-3"),
-                "llm_model": os.getenv("AGORA_CUSTOM_LLM_MODEL") if os.getenv("AGORA_CUSTOM_LLM_URL") else os.getenv("AGORA_LLM_MODEL", "gpt-4o-mini"),
-                "tts_model": os.getenv("AGORA_TTS_MODEL", "speech-2.6-turbo"),
+            "shengwang": {
+                "configured": not shengwang_missing,
+                "missing": shengwang_missing,
+                "endpoint": "cn",
+                "turn_detection": "semantic",
+                "semantic_silence_ms": int(os.getenv("SHENGWANG_SEMANTIC_SILENCE_MS", "240")),
+                "semantic_max_wait_ms": int(os.getenv("SHENGWANG_SEMANTIC_MAX_WAIT_MS", "3000")),
+                "tts_model": os.getenv("SHENGWANG_TTS_MODEL", os.getenv("AGORA_TTS_MODEL", "speech-2.6-turbo")),
             },
             "deployment": "vercel-explicit-functions",
             "time": int(time.time()),
