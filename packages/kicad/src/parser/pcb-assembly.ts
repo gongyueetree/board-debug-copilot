@@ -21,7 +21,9 @@ export interface AssemblyFootprint {
 export interface PcbAssemblyMap {
   footprints: AssemblyFootprint[]
   inspectable: AssemblyFootprint[]
+  /** Physical board outline when Edge.Cuts is available; footprint extents are fallback. */
   bounds: { minX: number; minY: number; maxX: number; maxY: number }
+  boundsSource: 'edge-cuts' | 'footprints'
 }
 
 function blocks(src: string, head: string): string[] {
@@ -75,6 +77,27 @@ function exclude(ref: string, value: string, footprint: string) {
   return ''
 }
 
+function boundsOf(points: { x: number; y: number }[]) {
+  return points.length
+    ? { minX: Math.min(...points.map((p) => p.x)), minY: Math.min(...points.map((p) => p.y)), maxX: Math.max(...points.map((p) => p.x)), maxY: Math.max(...points.map((p) => p.y)) }
+    : { minX: 0, minY: 0, maxX: 0, maxY: 0 }
+}
+
+/** Approximate board outline bounds from all geometry that lives on Edge.Cuts. */
+function edgeCutPoints(src: string): { x: number; y: number }[] {
+  const heads = ['gr_line', 'gr_rect', 'gr_arc', 'gr_circle', 'gr_poly', 'segment']
+  const points: { x: number; y: number }[] = []
+  for (const head of heads) {
+    for (const b of blocks(src, head)) {
+      if (!/\(layer\s+"?Edge\.Cuts"?\)/.test(b)) continue
+      const coord = /\((?:start|end|mid|center|xy)\s+(-?[\d.]+)\s+(-?[\d.]+)\)/g
+      let m: RegExpExecArray | null
+      while ((m = coord.exec(b))) points.push({ x: Number(m[1]), y: Number(m[2]) })
+    }
+  }
+  return points
+}
+
 export function parsePcbAssembly(src: string): PcbAssemblyMap {
   const fps = [...blocks(src, 'footprint'), ...blocks(src, 'module')]
   const footprints: AssemblyFootprint[] = fps.map((b) => {
@@ -98,10 +121,10 @@ export function parsePcbAssembly(src: string): PcbAssemblyMap {
   }).filter((f) => f.ref && f.ref !== 'REF**')
 
   const inspectable = footprints.filter((f) => !f.excluded && f.pads.length > 0)
-  const xs = footprints.flatMap((f) => [f.x, ...f.pads.map((p) => p.x)])
-  const ys = footprints.flatMap((f) => [f.y, ...f.pads.map((p) => p.y)])
-  const bounds = xs.length ? { minX: Math.min(...xs), minY: Math.min(...ys), maxX: Math.max(...xs), maxY: Math.max(...ys) } : { minX: 0, minY: 0, maxX: 0, maxY: 0 }
-  return { footprints, inspectable, bounds }
+  const edge = edgeCutPoints(src)
+  const fpPoints = footprints.flatMap((f) => [{ x: f.x, y: f.y }, ...f.pads.map((p) => ({ x: p.x, y: p.y }))])
+  const bounds = boundsOf(edge.length >= 2 ? edge : fpPoints)
+  return { footprints, inspectable, bounds, boundsSource: edge.length >= 2 ? 'edge-cuts' : 'footprints' }
 }
 
 export function assemblyPromptTable(map: PcbAssemblyMap, side: 'front' | 'back' = 'front') {
