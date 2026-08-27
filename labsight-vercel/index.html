@@ -15,7 +15,7 @@
 <header class="topbar">
   <div class="brand">
     <div class="brandmark">LS</div>
-    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.6 · Realtime Voice · OpenAI + Gemini</div></div>
+    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.7 · Camera Adapters · OpenAI + Gemini</div></div>
   </div>
   <div class="statusrow">
     <span id="apiStatus" class="pill neutral">AI 检查中…</span>
@@ -31,7 +31,7 @@
     <div class="panelhead">
       <div>
         <h2>实时视觉</h2>
-        <p>Insta360 Link 2C / UVC 摄像头 + 麦克风。Deep Vision 会从原始高清帧生成整板图与多个局部 Tile。</p>
+        <p>支持 Insta360 Link 系列 UVC 摄像头与 Seeed reCamera Pro Wi‑Fi 摄像头。Deep Vision 会从原始高清帧生成整板图与多个局部 Tile。</p>
       </div>
       <div class="scene-tabs" role="tablist">
         <button class="scene active" data-scene="pcb">PCB</button>
@@ -67,8 +67,8 @@
       <div class="focus-guide"><span>Deep Vision ROI · 把整块 PCB 放在框内</span></div>
       <div class="viewer-badge" id="viewerBadge">LIVE</div>
       <div class="viewer-empty" id="viewerEmpty">
-        <div class="camera-icon">◉</div><strong>连接 Insta360 Link 2C</strong>
-        <span>浏览器会请求摄像头与麦克风权限</span>
+        <div class="camera-icon">◉</div><strong>连接摄像头</strong>
+        <span>USB/UVC 可直接连接；reCamera Pro 通过 Wi‑Fi + 本地 Bridge 连接</span>
       </div>
     </div>
 
@@ -135,12 +135,13 @@ PCB Deep Vision：使用整板图 + 6 个高清局部 Tile，优先读取丝印�
 </section>
 </main>
 
-<footer>LabSight EVT0.6 · Realtime Voice · OpenAI + Gemini · Vercel stateless build</footer>
+<footer>LabSight EVT0.7 · Camera Adapters · OpenAI + Gemini · Vercel stateless build</footer>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="/app.js?v=0.5.5"></script>
 <script src="/markdown-ui.js?v=0.5.3"></script>
 <script src="/deepvision-ui.js?v=0.5.4"></script>
 <script src="/voice-upgrade.js?v=0.5.5"></script>
 <script src="/realtime-voice.js?v=0.6.1"></script>
+<script src="/camera-adapters.js?v=0.7.0"></script>
 </body>
 </html>
