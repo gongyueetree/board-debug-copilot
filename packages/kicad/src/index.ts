@@ -4,7 +4,7 @@
  * rules   原理图规则（确定性，先于 LLM）
  * graph   拓扑识别与 DesignDigest
  * cli     kicad-cli adapter，失败降级 mock 不崩项目
- * parser  netlist S-expr 解析
+ * parser  netlist / PCB S-expr 解析
  */
 export { SCHEMATIC_RULES, runSchematicRules, parseValue } from './rules/schematic-rules'
 export { finding, type DesignGraph, type SchematicRule } from './rules/types'
@@ -24,6 +24,13 @@ export {
   parseNetlist,
   parseSExpr,
 } from './parser/netlist'
+export {
+  parsePcbAssembly,
+  assemblyPromptTable,
+  type AssemblyPad,
+  type AssemblyFootprint,
+  type PcbAssemblyMap,
+} from './parser/pcb-assembly'
 
 export {
   parseKicadArchive,
@@ -48,4 +55,4 @@ export {
   parseErcDrcText,
 } from './parser/erc-drc'
 
-export const KICAD_PACKAGE_VERSION = '0.3.0'
+export const KICAD_PACKAGE_VERSION = '0.4.0'
