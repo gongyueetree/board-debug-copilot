@@ -1,3 +1,4 @@
+import { CameraCapturePanel } from '@/components/photo/CameraCapturePanel'
 import { PhotosClient } from '@/components/photo/PhotosClient'
 import { api } from '@/lib/api'
 import { prefetch } from '@/lib/server-fetch'
@@ -11,12 +12,15 @@ export default async function PhotosPage({ params }: { params: Promise<{ id: str
   return (
     <div className="mx-auto max-w-[1600px]">
       <header className="mb-4">
-        <h1 className="text-xl font-semibold text-slate-900">PCB 照片</h1>
+        <h1 className="text-xl font-semibold text-slate-900">PCB 照片 / 实时视觉</h1>
         <p className="mt-1 text-sm text-slate-500">
-          上传 PCB 实物照片，AI 识别并与原理图 / PCB 设计对比分析
+          直接连接 Insta360 / UVC 或 Seeed reCamera Pro，抓取高清 PCB 画面并结合工程设计做 AI 检测
         </p>
       </header>
-      <PhotosClient projectId={id} initial={photos} />
+      <div className="space-y-4">
+        <CameraCapturePanel projectId={id} />
+        <PhotosClient projectId={id} initial={photos} />
+      </div>
     </div>
   )
 }
