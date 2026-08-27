@@ -4,6 +4,16 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { AiDiagnosis, Measurements, StepStatus, VisualFindings } from '@app/contracts'
 import { API_BASE, queryKeys } from './api'
 
+export interface AssemblyInspectionResult {
+  photoId: string
+  pcbFile: string
+  inspected: number
+  excluded: number
+  missing: { ref: string; value: string; confidence: number; evidence: string }[]
+  uncertain: { ref: string; value: string; confidence: number; evidence: string }[]
+  summary: string
+}
+
 async function send<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
   const res = await fetch(`${API_BASE}/api/v1${path}`, {
     method,
@@ -11,14 +21,12 @@ async function send<T>(path: string, body?: unknown, method = 'POST'): Promise<T
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   if (!res.ok) {
-    // 后端把校验失败的原因放在 message 里，直接透给用户比 "500" 有用
     const detail = await res.json().catch(() => ({}))
     throw new Error(detail.message ?? `请求失败: ${res.status}`)
   }
   return res.json()
 }
 
-/** File → base64（不含 data: 前缀），上传端点要的是纯 base64 */
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -71,6 +79,14 @@ export function useAnalyzePhoto(projectId: string) {
     mutationFn: (photoId: string) =>
       send<VisualFindings>('/ai/analyze-photo', { photoId, persist: true }),
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.photos(projectId) }),
+  })
+}
+
+/** P1 独立装配检查；不改变原 analyze-photo 的行为与测试基线。 */
+export function useAssemblyInspect() {
+  return useMutation({
+    mutationFn: (photoId: string) =>
+      send<AssemblyInspectionResult>('/ai/assembly-inspect', { photoId }),
   })
 }
 
