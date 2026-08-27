@@ -65,9 +65,13 @@
       const reference = prop(b, 'Reference');
       if (!reference) continue;
       const value = prop(b, 'Value');
+      const packageName = head ? head[1] : '';
       const layer = (b.match(/\(layer\s+"([^"]+)"\)/) || [])[1] || '';
       const attr = (b.match(/\(attr\s+([^\)]+)\)/) || [])[1] || '';
-      const excluded = /exclude_from_pos_files|exclude_from_bom/.test(attr) || /^H\d+$/i.test(reference) || /^TP\d+$/i.test(reference);
+      // KiCad may contain footprints that intentionally remain bare copper contacts.
+      // Pogo/test/card-edge contacts, mounting holes and test points are not "missing soldered parts".
+      const bareContact = /PogoPin|TestPoint|MountingHole|CardEdge|Edge_Connector/i.test(packageName);
+      const excluded = /exclude_from_pos_files|exclude_from_bom/.test(attr) || /^H\d+$/i.test(reference) || /^TP\d+$/i.test(reference) || bareContact;
       const rad = at.r * Math.PI / 180;
       const pads = [];
       for (const pb of balancedBlocks(b, '(pad ')) {
@@ -79,7 +83,7 @@
         pads.push({number:n, x:+gx.toFixed(4), y:+gy.toFixed(4)});
       }
       footprints.push({
-        reference, value, package:head ? head[1] : '', layer,
+        reference, value, package:packageName, layer,
         x:at.x, y:at.y, rotation:at.r, excluded, pads,
       });
     }
