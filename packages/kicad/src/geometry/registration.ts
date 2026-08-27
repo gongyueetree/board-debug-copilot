@@ -3,21 +3,31 @@ export interface Homography { h: [number, number, number, number, number, number
 
 function solveLinear(a: number[][], b: number[]): number[] {
   const n = b.length
-  const m = a.map((row, i) => [...row, b[i]])
+  const m = a.map((row, i) => [...row, b[i] ?? 0])
   for (let col = 0; col < n; col++) {
     let pivot = col
-    for (let r = col + 1; r < n; r++) if (Math.abs(m[r][col]) > Math.abs(m[pivot][col])) pivot = r
-    if (Math.abs(m[pivot][col]) < 1e-10) throw new Error('Homography points are degenerate')
-    ;[m[col], m[pivot]] = [m[pivot], m[col]]
-    const d = m[col][col]
-    for (let c = col; c <= n; c++) m[col][c] /= d
+    for (let r = col + 1; r < n; r++) {
+      if (Math.abs(m[r]?.[col] ?? 0) > Math.abs(m[pivot]?.[col] ?? 0)) pivot = r
+    }
+    const pivotValue = m[pivot]?.[col] ?? 0
+    if (Math.abs(pivotValue) < 1e-10) throw new Error('Homography points are degenerate')
+
+    const tmp = m[col]!
+    m[col] = m[pivot]!
+    m[pivot] = tmp
+
+    const row = m[col]!
+    const d = row[col]!
+    for (let c = col; c <= n; c++) row[c] = (row[c] ?? 0) / d
+
     for (let r = 0; r < n; r++) {
       if (r === col) continue
-      const f = m[r][col]
-      for (let c = col; c <= n; c++) m[r][c] -= f * m[col][c]
+      const rr = m[r]!
+      const f = rr[col] ?? 0
+      for (let c = col; c <= n; c++) rr[c] = (rr[c] ?? 0) - f * (row[c] ?? 0)
     }
   }
-  return m.map((r) => r[n])
+  return m.map((r) => r[n] ?? 0)
 }
 
 /** Four exact point correspondences → 3x3 homography (h33 fixed to 1). */
@@ -26,13 +36,15 @@ export function computeHomography(src: Point2D[], dst: Point2D[]): Homography {
   const a: number[][] = []
   const b: number[] = []
   for (let i = 0; i < 4; i++) {
-    const { x, y } = src[i]
-    const { x: u, y: v } = dst[i]
+    const s = src[i]!
+    const d = dst[i]!
+    const { x, y } = s
+    const { x: u, y: v } = d
     a.push([x, y, 1, 0, 0, 0, -u * x, -u * y]); b.push(u)
     a.push([0, 0, 0, x, y, 1, -v * x, -v * y]); b.push(v)
   }
   const q = solveLinear(a, b)
-  return { h: [q[0], q[1], q[2], q[3], q[4], q[5], q[6], q[7], 1] }
+  return { h: [q[0]!, q[1]!, q[2]!, q[3]!, q[4]!, q[5]!, q[6]!, q[7]!, 1] }
 }
 
 export function projectPoint(H: Homography, p: Point2D): Point2D {
@@ -91,15 +103,19 @@ export function generateFootprintRois(
       projectPoint(H, { x: maxX, y: maxY }),
       projectPoint(H, { x: minX, y: maxY }),
     ].map((p) => ({ x: clamp01(p.x), y: clamp01(p.y) }))
-    const xs = polygon.map((p) => p.x), ys = polygon.map((p) => p.y)
-    const x = Math.min(...xs), y = Math.min(...ys)
-    const right = Math.max(...xs), bottom = Math.max(...ys)
+    const xs = polygon.map((p) => p.x)
+    const ys = polygon.map((p) => p.y)
+    const x = Math.min(...xs)
+    const y = Math.min(...ys)
+    const right = Math.max(...xs)
+    const bottom = Math.max(...ys)
+    const centerPoint = projectPoint(H, { x: fp.x, y: fp.y })
     return {
       ref: fp.ref,
       x: Number(x.toFixed(5)), y: Number(y.toFixed(5)),
       w: Number((right - x).toFixed(5)), h: Number((bottom - y).toFixed(5)),
       polygon: polygon.map((p) => ({ x: Number(p.x.toFixed(5)), y: Number(p.y.toFixed(5)) })),
-      center: (() => { const p = projectPoint(H, { x: fp.x, y: fp.y }); return { x: Number(clamp01(p.x).toFixed(5)), y: Number(clamp01(p.y).toFixed(5)) } })(),
+      center: { x: Number(clamp01(centerPoint.x).toFixed(5)), y: Number(clamp01(centerPoint.y).toFixed(5)) },
     }
   })
 }
