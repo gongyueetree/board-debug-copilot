@@ -17,7 +17,7 @@
 <header class="topbar">
   <div class="brand">
     <div class="brandmark">LS</div>
-    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.8 · Agora Voice Adapter · OpenAI + Gemini</div></div>
+    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.9 · reCamera WebRTC · Agora Voice · OpenAI + Gemini</div></div>
   </div>
   <div class="statusrow">
     <span id="apiStatus" class="pill neutral">AI 检查中…</span>
@@ -33,7 +33,7 @@
     <div class="panelhead">
       <div>
         <h2>实时视觉</h2>
-        <p>支持 Insta360 Link 系列 UVC 摄像头与 Seeed reCamera Pro Wi‑Fi 摄像头。reCamera 后台服务安装一次后自动随系统启动。</p>
+        <p>支持 Insta360 Link 系列 UVC 摄像头与 Seeed reCamera Pro Wi‑Fi 摄像头。reCamera 使用 RTSP→WebRTC 低延迟链路；后台服务仅需安装一次，之后随 macOS / Windows 登录自动运行。</p>
       </div>
       <div class="scene-tabs" role="tablist">
         <button class="scene active" data-scene="pcb">PCB</button>
@@ -70,7 +70,7 @@
       <div class="viewer-badge" id="viewerBadge">LIVE</div>
       <div class="viewer-empty" id="viewerEmpty">
         <div class="camera-icon">◉</div><strong>连接摄像头</strong>
-        <span>USB/UVC 可直接连接；reCamera Pro 通过 Wi‑Fi 自动接入后台服务</span>
+        <span>USB/UVC 可直接连接；reCamera Pro 通过 Wi‑Fi + WebRTC 接入</span>
       </div>
     </div>
 
@@ -116,7 +116,7 @@
 普通分析：快速回答当前问题。
 PCB Deep Vision：使用整板图 + 6 个高清局部 Tile，优先读取丝印、IC 顶标、接口标签、频率标记并输出器件/接口清单。
 
-EVT0.8 新增 Agora 实时语音模式，可与原有 Legacy Voice 做 A/B 测试。</div></div>
+EVT0.9：reCamera Pro 改为 WebRTC 低延迟视频；Agora 实时语音继续保留。</div></div>
     </div>
 
     <div class="quickprompts">
@@ -137,7 +137,7 @@ EVT0.8 新增 Agora 实时语音模式，可与原有 Legacy Voice 做 A/B 测�
 </section>
 </main>
 
-<footer>LabSight EVT0.8 · Agora Voice Adapter · Camera Adapters · OpenAI + Gemini</footer>
+<footer>LabSight EVT0.9 · reCamera WebRTC · Agora Voice · Camera Adapters · OpenAI + Gemini</footer>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.24.7/AgoraRTC_N-production.js"></script>
 <script src="/app.js?v=0.5.5"></script>
@@ -145,7 +145,7 @@ EVT0.8 新增 Agora 实时语音模式，可与原有 Legacy Voice 做 A/B 测�
 <script src="/deepvision-ui.js?v=0.5.4"></script>
 <script src="/voice-upgrade.js?v=0.5.5"></script>
 <script src="/realtime-voice.js?v=0.6.1"></script>
-<script src="/camera-adapters.js?v=0.8.0"></script>
+<script src="/camera-adapters.js?v=0.9.0"></script>
 <script src="/agora-voice-adapter.js?v=0.8.2"></script>
 <script src="/assembly-inspection.js?v=0.8.3"></script>
 </body>
