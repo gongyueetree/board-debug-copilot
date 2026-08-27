@@ -4,6 +4,24 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { AiDiagnosis, Measurements, StepStatus, VisualFindings } from '@app/contracts'
 import { API_BASE, queryKeys } from './api'
 
+export interface AssemblyAlignmentResult {
+  photoId: string
+  pcbFile: string
+  side: 'front' | 'back'
+  status: 'aligned' | 'low-confidence' | 'unavailable'
+  confidence: number
+  validationError: number | null
+  boundsSource: 'edge-cuts' | 'footprints'
+  corners: {
+    pcb00: { x: number; y: number }
+    pcb10: { x: number; y: number }
+    pcb11: { x: number; y: number }
+    pcb01: { x: number; y: number }
+  } | null
+  anchors: { ref: string; x: number; y: number; confidence: number }[]
+  rois: { ref: string; value: string; x: number; y: number; w: number; h: number; polygon: { x: number; y: number }[]; center: { x: number; y: number } }[]
+}
+
 export interface AssemblyInspectionResult {
   photoId: string
   pcbFile: string
@@ -12,6 +30,8 @@ export interface AssemblyInspectionResult {
   missing: { ref: string; value: string; confidence: number; evidence: string }[]
   uncertain: { ref: string; value: string; confidence: number; evidence: string }[]
   summary: string
+  alignment: Pick<AssemblyAlignmentResult, 'status' | 'confidence' | 'validationError' | 'boundsSource' | 'corners' | 'anchors'>
+  rois: AssemblyAlignmentResult['rois']
 }
 
 async function send<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
@@ -82,7 +102,15 @@ export function useAnalyzePhoto(projectId: string) {
   })
 }
 
-/** P1 独立装配检查；不改变原 analyze-photo 的行为与测试基线。 */
+/** P1.5 独立自动配准；force=true 会忽略已缓存 alignmentJson 重算。 */
+export function useAssemblyAlign() {
+  return useMutation({
+    mutationFn: ({ photoId, force = false }: { photoId: string; force?: boolean }) =>
+      send<AssemblyAlignmentResult>('/ai/assembly-align', { photoId, force }),
+  })
+}
+
+/** P1 装配检查；内部会自动确保已经完成 P1.5 配准。 */
 export function useAssemblyInspect() {
   return useMutation({
     mutationFn: (photoId: string) =>
