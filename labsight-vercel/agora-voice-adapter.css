@@ -1,0 +1,38 @@
+.agora-mode-wrap{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  margin-left:auto;
+  flex-wrap:wrap;
+}
+.agora-mode-label{
+  font-size:12px;
+  color:#8fa7b8;
+}
+.agora-mode-select{
+  min-width:138px;
+  height:32px;
+  border:1px solid #294252;
+  border-radius:8px;
+  background:#0f1820;
+  color:#dbe7ef;
+  padding:0 8px;
+}
+.agora-session-btn{
+  height:32px;
+  padding:0 12px;
+  border-radius:8px;
+}
+.voicebtn.agora-live{
+  border-color:rgba(53,226,165,.65)!important;
+  background:rgba(15,80,58,.42)!important;
+  box-shadow:0 0 0 1px rgba(53,226,165,.12),0 0 18px rgba(53,226,165,.08);
+}
+.voicebtn.agora-live span::before{
+  content:'● ';
+  color:#35e2a5;
+}
+.hidden{display:none!important;}
+@media (max-width: 900px){
+  .agora-mode-wrap{width:100%;margin-left:0;margin-top:8px;}
+}
