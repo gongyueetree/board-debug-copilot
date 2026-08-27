@@ -10,12 +10,13 @@
   <link rel="stylesheet" href="/deepvision-ui.css?v=0.5.2" />
   <link rel="stylesheet" href="/markdown-ui.css?v=0.5.3" />
   <link rel="stylesheet" href="/realtime-voice.css?v=0.6.1" />
+  <link rel="stylesheet" href="/agora-voice-adapter.css?v=0.8.0" />
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
     <div class="brandmark">LS</div>
-    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.7 · Camera Adapters · OpenAI + Gemini</div></div>
+    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.8 · Agora Voice Adapter · OpenAI + Gemini</div></div>
   </div>
   <div class="statusrow">
     <span id="apiStatus" class="pill neutral">AI 检查中…</span>
@@ -114,7 +115,7 @@
 普通分析：快速回答当前问题。
 PCB Deep Vision：使用整板图 + 6 个高清局部 Tile，优先读取丝印、IC 顶标、接口标签、频率标记并输出器件/接口清单。
 
-把 PCB 尽量放满绿色取景框，然后点击 “PCB Deep Vision”。</div></div>
+EVT0.8 新增 Agora 实时语音模式，可与原有 Legacy Voice 做 A/B 测试。</div></div>
     </div>
 
     <div class="quickprompts">
@@ -135,13 +136,15 @@ PCB Deep Vision：使用整板图 + 6 个高清局部 Tile，优先读取丝印�
 </section>
 </main>
 
-<footer>LabSight EVT0.7 · Camera Adapters · OpenAI + Gemini · Vercel stateless build</footer>
+<footer>LabSight EVT0.8 · Agora Voice Adapter · Camera Adapters · OpenAI + Gemini</footer>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.24.7/AgoraRTC_N-production.js"></script>
 <script src="/app.js?v=0.5.5"></script>
 <script src="/markdown-ui.js?v=0.5.3"></script>
 <script src="/deepvision-ui.js?v=0.5.4"></script>
 <script src="/voice-upgrade.js?v=0.5.5"></script>
 <script src="/realtime-voice.js?v=0.6.1"></script>
 <script src="/camera-adapters.js?v=0.7.0"></script>
+<script src="/agora-voice-adapter.js?v=0.8.0"></script>
 </body>
 </html>
