@@ -31,6 +31,15 @@ export {
   type AssemblyFootprint,
   type PcbAssemblyMap,
 } from './parser/pcb-assembly'
+export {
+  computeHomography,
+  projectPoint,
+  generateFootprintRois,
+  type Point2D,
+  type Homography,
+  type FootprintGeometry,
+  type FootprintRoi,
+} from './geometry/registration'
 
 export {
   parseKicadArchive,
@@ -55,4 +64,4 @@ export {
   parseErcDrcText,
 } from './parser/erc-drc'
 
-export const KICAD_PACKAGE_VERSION = '0.4.0'
+export const KICAD_PACKAGE_VERSION = '0.5.0'
