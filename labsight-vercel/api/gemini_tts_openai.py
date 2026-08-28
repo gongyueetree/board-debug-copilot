@@ -9,7 +9,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="LabSight Gemini TTS OpenAI Bridge", version="0.1.0")
+app = FastAPI(title="LabSight Gemini TTS OpenAI Bridge", version="0.1.1")
 
 
 class SpeechRequest(BaseModel):
@@ -22,13 +22,9 @@ class SpeechRequest(BaseModel):
 
 
 def _expected_key() -> str:
-    # No extra user-managed secret is required. Reuse the Shengwang app certificate
-    # as an internal bridge secret unless an explicit bridge key is configured.
-    return (
-        os.getenv("SHENGWANG_CUSTOM_TTS_API_KEY", "").strip()
-        or os.getenv("SHENGWANG_APP_CERTIFICATE", "").strip()
-        or os.getenv("AGORA_APP_CERTIFICATE", "").strip()
-    )
+    # Optional. If unset, Shengwang can call this bridge without an extra credential.
+    # GEMINI_API_KEY remains server-side and is never exposed to Shengwang or the browser.
+    return os.getenv("SHENGWANG_CUSTOM_TTS_API_KEY", "").strip()
 
 
 def _authorize(authorization: str | None, x_api_key: str | None) -> None:
@@ -69,10 +65,12 @@ def health():
     return {
         "ok": True,
         "service": "gemini-tts-openai-bridge",
+        "version": "0.1.1",
         "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
         "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"),
         "sample_rate": 24000,
         "configured": bool(os.getenv("GEMINI_API_KEY", "").strip()),
+        "auth": "optional-secret" if _expected_key() else "none",
     }
 
 
@@ -87,8 +85,6 @@ def speech(
     model = os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview").strip()
     voice = (req.voice or os.getenv("GEMINI_TTS_VOICE", "Kore")).strip() or "Kore"
 
-    # Gemini 3.1 TTS produces raw PCM: signed 16-bit little-endian,
-    # mono, 24 kHz. This matches Shengwang GenericTTS response_format=pcm.
     text = req.input.strip()
     if req.instruction:
         text = f"{req.instruction.strip()}\n请只朗读以下正文，不要朗读指令本身：\n{text}"
@@ -109,7 +105,7 @@ def speech(
     }
 
     last_error = ""
-    for attempt in range(2):
+    for _ in range(2):
         try:
             response = requests.post(
                 url,
