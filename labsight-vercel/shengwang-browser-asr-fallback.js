@@ -1,7 +1,7 @@
 (() => {
-  // EVT0.14 browser-side ASR fallback.
-  // The Shengwang RTC/LLM/TTS path is kept intact; only speech recognition is
-  // temporarily mirrored in the browser when native Fengming turns are not firing.
+  // Browser-side ASR fallback for Shengwang realtime voice.
+  // Speech is transcribed in-browser/server, then visual questions are answered
+  // against the current LabSight camera frame before being spoken through Shengwang.
   const bar = document.querySelector('.wakebar');
   if (!bar || !navigator.mediaDevices?.getUserMedia) return;
 
@@ -28,6 +28,22 @@
     pill.className = `pill ${kind}`;
   };
 
+  const postAgent = async (action, extra={}) => {
+    const voice = window.LabSightShengwangVoice;
+    const session = voice?.session;
+    if (!voice?.active || !session?.agent_id) throw new Error('声网会话已结束');
+    const r = await fetch('/api/shengwang_session', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({action, agent_id:session.agent_id, channel:session.channel, provider:state?.provider, ...extra}),
+    });
+    const raw = await r.text();
+    let data = {};
+    try { data = JSON.parse(raw); } catch {}
+    if (!r.ok) throw new Error(data.detail || raw || `HTTP ${r.status}`);
+    return data;
+  };
+
   const postThink = async (text) => {
     const voice = window.LabSightShengwangVoice;
     const session = voice?.session;
@@ -35,17 +51,48 @@
     const r = await fetch('/api/shengwang_control', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({
-        action:'think',
-        agent_id:session.agent_id,
-        text,
-      }),
+      body:JSON.stringify({action:'think', agent_id:session.agent_id, text}),
     });
-    const body = await r.text();
+    const raw = await r.text();
     let data = {};
-    try { data = JSON.parse(body); } catch {}
-    if (!r.ok) throw new Error(data.detail || body || `HTTP ${r.status}`);
+    try { data = JSON.parse(raw); } catch {}
+    if (!r.ok) throw new Error(data.detail || raw || `HTTP ${r.status}`);
     return data;
+  };
+
+  const analyzeCurrentFrame = async (text) => {
+    if (!state?.stream || !els?.video?.videoWidth) return null;
+    const image = captureFrame();
+    if (!image) return null;
+
+    addMessage('user', `🎙 ${text}`);
+    const thinking = addMessage('assistant', '正在结合当前画面判断…', 'thinking');
+    try {
+      const payload = {
+        question:text,
+        scene:state.scene,
+        provider:state.provider,
+        image_data_url:image,
+        project_context:state.projectContext,
+        conversation:state.conversation.slice(-8),
+      };
+      const r = await fetch('/api/analyze', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload),
+      });
+      const d = await readJsonResponse(r);
+      thinking.remove();
+      addMessage('assistant', `[${d.provider.toUpperCase()} · ${d.model}]\n${d.answer}`);
+      state.conversation.push({role:'user', content:text}, {role:'assistant', content:d.answer});
+      if (state.conversation.length > 20) state.conversation = state.conversation.slice(-20);
+      extendSession();
+      return d.answer;
+    } catch (e) {
+      thinking.remove();
+      addMessage('assistant', `分析失败：${e.message}`);
+      throw e;
+    }
   };
 
   const transcribe = async (blob, mime) => {
@@ -67,16 +114,26 @@
         setState('未识别到语音', 'warn');
         return;
       }
-      addMessage('user', `🎙 ${text}`);
+
       if (els.recordingState) els.recordingState.textContent = `🎙 已识别：${text}`;
-      setState('已识别 · 送入声网', 'ok');
-      await postThink(text);
-      if (els.recordingState) els.recordingState.textContent = `✅ 语音已识别并送入声网 Agent：${text}`;
-      setState('正在等待回答', 'ok');
+      setState('正在结合画面分析…', 'ok');
+
+      const answer = await analyzeCurrentFrame(text);
+      if (answer) {
+        if (els.recordingState) els.recordingState.textContent = `✅ 已结合当前画面回答：${text}`;
+        setState('正在语音回答', 'ok');
+        await postAgent('speak', {text:answer});
+      } else {
+        addMessage('user', `🎙 ${text}`);
+        setState('已识别 · 送入声网', 'ok');
+        await postThink(text);
+        if (els.recordingState) els.recordingState.textContent = `✅ 语音已识别并送入声网 Agent：${text}`;
+        setState('正在等待回答', 'ok');
+      }
     } catch (e) {
       console.warn('Shengwang browser ASR fallback:', e);
-      setState('语音兜底失败', 'warn');
-      if (els.recordingState) els.recordingState.textContent = `❌ 语音输入兜底失败：${e.message}`;
+      setState('语音处理失败', 'warn');
+      if (els.recordingState) els.recordingState.textContent = `❌ 语音处理失败：${e.message}`;
     } finally {
       processing = false;
     }
@@ -122,7 +179,7 @@
       speechFrames = 0;
       if (speaking) {
         silenceFrames += 1;
-        if (silenceFrames >= 7) { // ~700 ms
+        if (silenceFrames >= 7) {
           speaking = false;
           silenceFrames = 0;
           stopRecording();
@@ -186,8 +243,6 @@
     setState('语音输入待机', 'neutral');
   };
 
-  // Attach automatically to a normal Shengwang session. This is intentionally
-  // a fallback layer: Probe diagnostics are excluded.
   setInterval(() => {
     const voice = window.LabSightShengwangVoice;
     if (voice?.active && voice?.ttsTarget !== 'probe') {
