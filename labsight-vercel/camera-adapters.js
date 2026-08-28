@@ -1,5 +1,5 @@
 (() => {
-  // LabSight Camera Adapters EVT0.9
+  // LabSight Camera Adapters EVT0.10
   // UVC/Insta360: 4K + browser-exposed continuous AF.
   // reCamera Pro: RTSP is converted to WebRTC by the auto-start local service;
   // the browser receives a real MediaStreamTrack (no JPEG polling / canvas bridge).
@@ -19,6 +19,8 @@
     .camera-focus-pill{white-space:nowrap}
     .bridge-state{font-weight:650}
     .bridge-state.ok{color:#57e3b2}.bridge-state.warn{color:#ffbf69}
+    .camera-disconnect{display:none;border-color:rgba(255,106,106,.38)!important;color:#ff9a9a!important}
+    .camera-disconnect.show{display:inline-flex}
     @media(max-width:900px){.camera-adapter-panel{grid-template-columns:1fr}}
   `;
   document.head.appendChild(style);
@@ -33,6 +35,13 @@
   sourceSelect.add(new Option('USB / UVC 摄像头', 'uvc'));
   sourceSelect.add(new Option('Seeed reCamera Pro（Wi‑Fi）', 'recamera'));
   toolbar.insertBefore(sourceSelect, els.cameraSelect);
+
+  const disconnectBtn = document.createElement('button');
+  disconnectBtn.id = 'disconnectCamera';
+  disconnectBtn.className = 'secondary camera-disconnect';
+  disconnectBtn.type = 'button';
+  disconnectBtn.textContent = '断开连接';
+  toolbar.appendChild(disconnectBtn);
 
   const panel = document.createElement('div');
   panel.className = 'camera-adapter-panel';
@@ -63,6 +72,30 @@
     remotePc = null;
     try { remoteMicStream?.getTracks().forEach(t => t.stop()); } catch {}
     remoteMicStream = null;
+  }
+
+  function setConnectedUi(connected) {
+    disconnectBtn.classList.toggle('show', connected);
+    if (!connected) {
+      els.viewerBadge.style.display = 'none';
+      els.viewerEmpty.classList.remove('hidden');
+      els.startCamera.textContent = sourceSelect.value === 'recamera' ? '连接 reCamera Pro' : '连接摄像头';
+    }
+  }
+
+  function disconnectCamera() {
+    stopWakeListening();
+    try { window.cancelLabSightSpeech?.(false); } catch {}
+    stopRemote();
+    try { state.stream?.getTracks().forEach(t => t.stop()); } catch {}
+    state.stream = null;
+    try { els.video.pause(); } catch {}
+    els.video.srcObject = null;
+    setPill(els.cameraStatus, 'Camera 未连接', 'neutral');
+    setPill(els.micStatus, 'Mic 未连接', 'neutral');
+    setFocusPill('自动对焦 · 待检测', 'neutral');
+    setConnectedUi(false);
+    window.LabSightAutoScene?.reset?.();
   }
 
   async function checkBridge() {
@@ -102,9 +135,7 @@
   }
 
   async function startUvc() {
-    stopRemote();
-    stopWakeListening();
-    try { state.stream?.getTracks().forEach(t => t.stop()); } catch {}
+    disconnectCamera();
     const videoId = els.cameraSelect.value, audioId = els.micSelect.value;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -119,9 +150,12 @@
       setPill(els.cameraStatus, `Camera · ${vt.label || '已连接'} · ${s.width || '?'}×${s.height || '?'}`, 'ok');
       setPill(els.micStatus, `Mic · ${at?.label || '已连接'}`, 'ok');
       els.viewerEmpty.classList.add('hidden'); els.viewerBadge.style.display='block'; els.viewerBadge.textContent='LIVE'; els.startCamera.textContent='重新连接';
+      setConnectedUi(true);
       await enumerateDevices(false);
+      window.LabSightAutoScene?.detectNow?.();
       if (els.wakeToggle.checked) startWakeListening();
     } catch (e) {
+      disconnectCamera();
       setPill(els.cameraStatus, 'Camera/Mic 连接失败', 'warn');
       alert(`连接失败：${e.message}\n\n请允许摄像头和麦克风权限。`);
     }
@@ -138,9 +172,7 @@
   }
 
   async function startReCamera() {
-    stopRemote();
-    stopWakeListening();
-    try { state.stream?.getTracks().forEach(t => t.stop()); } catch {}
+    disconnectCamera();
     setPill(els.cameraStatus, 'reCamera Pro · WebRTC 正在连接…', 'neutral');
     setFocusPill('reCamera Pro · M12 镜头手动对焦', 'neutral');
 
@@ -198,15 +230,18 @@
       setPill(els.cameraStatus, 'reCamera Pro · Wi‑Fi · WebRTC', 'ok');
       setPill(els.micStatus, audioTracks.length ? `Mic · ${audioTracks[0].label || '本机麦克风'}` : 'Mic · 未连接', audioTracks.length?'ok':'warn');
       els.viewerEmpty.classList.add('hidden'); els.viewerBadge.style.display='block'; els.viewerBadge.textContent='reCamera WebRTC'; els.startCamera.textContent='重新连接';
+      setConnectedUi(true);
+      window.LabSightAutoScene?.detectNow?.();
       if (els.wakeToggle.checked && audioTracks.length) startWakeListening();
     } catch (e) {
-      stopRemote();
+      disconnectCamera();
       setPill(els.cameraStatus, 'reCamera Pro 连接失败', 'warn');
       alert(`reCamera Pro 连接失败：${e.message}`);
     }
   }
 
   sourceSelect.addEventListener('change', () => {
+    disconnectCamera();
     const remote = sourceSelect.value === 'recamera';
     panel.classList.toggle('show', remote);
     els.cameraSelect.disabled = remote;
@@ -220,8 +255,13 @@
     if (sourceSelect.value === 'recamera') await startReCamera(); else await startUvc();
   }, true);
 
+  disconnectBtn.addEventListener('click', e => {
+    e.preventDefault(); e.stopImmediatePropagation();
+    disconnectCamera();
+  }, true);
+
   window.LabSightCameraAdapters = {
-    enableAutofocus, stopRemote, checkBridge,
+    enableAutofocus, stopRemote, disconnectCamera, checkBridge,
     get source(){ return sourceSelect.value; },
     get peerConnection(){ return remotePc; }
   };
