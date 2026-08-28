@@ -9,10 +9,10 @@ from typing import Any
 
 import requests
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from agora_token_builder import RtcTokenBuilder
 
-app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.1")
+app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.2")
 
 API_BASE = "https://api.agora.io/cn/api/conversational-ai-agent/v2/projects"
 
@@ -50,8 +50,23 @@ def _basic_auth_header() -> str:
 
 
 def _rtc_token(app_id: str, app_cert: str, channel: str, uid: int, ttl: int = 3600) -> str:
-    expire_ts = int(time.time()) + ttl
-    return RtcTokenBuilder.buildTokenWithUid(app_id, app_cert, channel, uid, 1, expire_ts)
+    """Import the token builder lazily so a packaging/runtime issue cannot crash the whole Vercel function at import time."""
+    try:
+        from agora_token_builder import RtcTokenBuilder
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"声网 RTC Token Builder 加载失败：{type(exc).__name__}: {exc}",
+        ) from exc
+
+    try:
+        expire_ts = int(time.time()) + ttl
+        return RtcTokenBuilder.buildTokenWithUid(app_id, app_cert, channel, uid, 1, expire_ts)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=500,
+            detail=f"生成声网 RTC Token 失败：{type(exc).__name__}: {exc}",
+        ) from exc
 
 
 def _public_base_url() -> str:
@@ -82,12 +97,36 @@ def _custom_llm_key() -> str:
     )
 
 
+def _env_float(name: str, fallback_name: str | None, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw and fallback_name:
+        raw = os.getenv(fallback_name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=f"环境变量 {name} 不是有效数字：{raw}") from exc
+
+
+def _env_int(name: str, fallback_name: str | None, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw and fallback_name:
+        raw = os.getenv(fallback_name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=f"环境变量 {name} 不是有效整数：{raw}") from exc
+
+
 def _llm_params(model: str) -> dict[str, Any]:
     return {
         "model": model,
         "stream": True,
-        "temperature": float(os.getenv("SHENGWANG_LLM_TEMPERATURE", os.getenv("AGORA_LLM_TEMPERATURE", "0.3"))),
-        "max_tokens": int(os.getenv("SHENGWANG_LLM_MAX_TOKENS", os.getenv("AGORA_LLM_MAX_TOKENS", "220"))),
+        "temperature": _env_float("SHENGWANG_LLM_TEMPERATURE", "AGORA_LLM_TEMPERATURE", 0.3),
+        "max_tokens": _env_int("SHENGWANG_LLM_MAX_TOKENS", "AGORA_LLM_MAX_TOKENS", 220),
     }
 
 
@@ -133,16 +172,18 @@ def _build_tts() -> dict[str, Any]:
     model = os.getenv("SHENGWANG_TTS_MODEL", os.getenv("AGORA_TTS_MODEL", "speech-2.6-turbo"))
     if vendor == "minimax":
         key = os.getenv("SHENGWANG_TTS_API_KEY", "").strip()
+        if not key:
+            raise HTTPException(status_code=503, detail="未配置 SHENGWANG_TTS_API_KEY")
         params: dict[str, Any] = {
             "key": key,
             "model": model,
             "voice_setting": {
                 "voice_id": os.getenv("SHENGWANG_TTS_VOICE_ID", "female-shaonv"),
-                "speed": float(os.getenv("SHENGWANG_TTS_SPEED", "1.05")),
+                "speed": _env_float("SHENGWANG_TTS_SPEED", None, 1.05),
                 "vol": 1,
                 "pitch": 0,
             },
-            "audio_setting": {"sample_rate": int(os.getenv("SHENGWANG_TTS_SAMPLE_RATE", "16000"))},
+            "audio_setting": {"sample_rate": _env_int("SHENGWANG_TTS_SAMPLE_RATE", None, 16000)},
         }
         group_id = os.getenv("SHENGWANG_TTS_GROUP_ID", "").strip()
         if group_id:
@@ -181,14 +222,14 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
     prefix = os.getenv("SHENGWANG_CHANNEL_PREFIX", "labsight-voice")
     channel = req.channel or f"{prefix}-{uuid.uuid4().hex[:10]}"
     user_uid = random.randint(100000, 999999)
-    agent_uid = int(os.getenv("SHENGWANG_AGENT_UID", "0"))
+    agent_uid = _env_int("SHENGWANG_AGENT_UID", None, 0)
     user_token = _rtc_token(app_id, app_cert, channel, user_uid)
     agent_token = _rtc_token(app_id, app_cert, channel, agent_uid)
 
-    silence_ms = int(os.getenv("SHENGWANG_SEMANTIC_SILENCE_MS", "240"))
-    max_wait_ms = int(os.getenv("SHENGWANG_SEMANTIC_MAX_WAIT_MS", "3000"))
-    interrupt_ms = int(os.getenv("SHENGWANG_INTERRUPT_MS", "180"))
-    speaking_interrupt_ms = int(os.getenv("SHENGWANG_SPEAKING_INTERRUPT_MS", "220"))
+    silence_ms = _env_int("SHENGWANG_SEMANTIC_SILENCE_MS", None, 240)
+    max_wait_ms = _env_int("SHENGWANG_SEMANTIC_MAX_WAIT_MS", None, 3000)
+    interrupt_ms = _env_int("SHENGWANG_INTERRUPT_MS", None, 180)
+    speaking_interrupt_ms = _env_int("SHENGWANG_SPEAKING_INTERRUPT_MS", None, 220)
 
     properties: dict[str, Any] = {
         "channel": channel,
@@ -196,10 +237,10 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "agent_rtc_uid": str(agent_uid),
         "remote_rtc_uids": [str(user_uid)],
         "enable_string_uid": False,
-        "idle_timeout": int(os.getenv("SHENGWANG_IDLE_TIMEOUT", "180")),
+        "idle_timeout": _env_int("SHENGWANG_IDLE_TIMEOUT", None, 180),
         "asr": {
-            "language": "zh-CN",
-            "vendor": "fengming",
+            "language": os.getenv("SHENGWANG_ASR_LANGUAGE", "zh-CN"),
+            "vendor": os.getenv("SHENGWANG_ASR_VENDOR", "fengming"),
             "keywords": [
                 "LabSight", "ezPLM", "KiCad", "PCB", "FPGA", "RP2040", "RP2350", "ADALM2000",
                 "示波器", "逻辑分析仪", "信号发生器", "电源纹波", "焊点", "丝印", "位号",
@@ -213,7 +254,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
                     "vad_config": {
                         "interrupt_duration_ms": interrupt_ms,
                         "speaking_interrupt_duration_ms": speaking_interrupt_ms,
-                        "prefix_padding_ms": int(os.getenv("SHENGWANG_PREFIX_PADDING_MS", "600")),
+                        "prefix_padding_ms": _env_int("SHENGWANG_PREFIX_PADDING_MS", None, 600),
                     },
                 },
                 "end_of_speech": {
@@ -238,7 +279,10 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
 
     payload = {"name": f"labsight-{uuid.uuid4().hex[:12]}", "properties": properties}
     response = _request("POST", f"{API_BASE}/{app_id}/join", json_body=payload)
-    data = response.json()
+    try:
+        data = response.json()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"声网创建智能体返回了非 JSON：{response.text[:1200]}") from exc
     return {
         "ok": True,
         "mode": "shengwang_realtime_voice",
@@ -250,7 +294,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "agent_id": data.get("agent_id"),
         "agent_status": data.get("status", "RUNNING"),
         "turn_detection": {"mode": "semantic", "silence_ms": silence_ms, "max_wait_ms": max_wait_ms},
-        "asr": {"vendor": "fengming", "language": "zh-CN"},
+        "asr": {"vendor": os.getenv("SHENGWANG_ASR_VENDOR", "fengming"), "language": os.getenv("SHENGWANG_ASR_LANGUAGE", "zh-CN")},
     }
 
 
@@ -278,13 +322,40 @@ def _interrupt(req: ShengwangSessionRequest) -> dict[str, Any]:
     return {"ok": True, "interrupted": True, "agent_id": req.agent_id, "response": data}
 
 
+@app.get("/api/shengwang_session")
+def shengwang_session_health():
+    missing = []
+    for name in (
+        "SHENGWANG_APP_ID",
+        "SHENGWANG_APP_CERTIFICATE",
+        "SHENGWANG_CUSTOMER_ID",
+        "SHENGWANG_CUSTOMER_SECRET",
+        "SHENGWANG_TTS_API_KEY",
+    ):
+        if not os.getenv(name, "").strip():
+            missing.append(name)
+    return {"ok": True, "service": "shengwang-session", "version": "0.10.2", "configured": not missing, "missing": missing}
+
+
 @app.post("/api/shengwang_session")
 def shengwang_session(req: ShengwangSessionRequest):
-    action = req.action.strip().lower()
-    if action == "start":
-        return _start(req)
-    if action == "stop":
-        return _stop(req)
-    if action == "interrupt":
-        return _interrupt(req)
-    raise HTTPException(status_code=400, detail="action 仅支持 start/stop/interrupt")
+    try:
+        action = req.action.strip().lower()
+        if action == "start":
+            return _start(req)
+        if action == "stop":
+            return _stop(req)
+        if action == "interrupt":
+            return _interrupt(req)
+        raise HTTPException(status_code=400, detail="action 仅支持 start/stop/interrupt")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Keep Vercel from turning a Python exception into opaque FUNCTION_INVOCATION_FAILED.
+        return JSONResponse(
+            status_code=500,
+            content={
+                "ok": False,
+                "detail": f"声网会话内部错误：{type(exc).__name__}: {exc}",
+            },
+        )
