@@ -11,7 +11,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="LabSight Gemini TTS OpenAI Bridge", version="0.1.2")
+app = FastAPI(title="LabSight Gemini TTS OpenAI Bridge", version="0.1.3")
 
 
 class SpeechRequest(BaseModel):
@@ -24,8 +24,6 @@ class SpeechRequest(BaseModel):
 
 
 def _expected_key() -> str:
-    # Optional. If unset, Shengwang can call this bridge without an extra credential.
-    # GEMINI_API_KEY remains server-side and is never exposed to Shengwang or the browser.
     return os.getenv("SHENGWANG_CUSTOM_TTS_API_KEY", "").strip()
 
 
@@ -111,7 +109,7 @@ def health():
     return {
         "ok": True,
         "service": "gemini-tts-openai-bridge",
-        "version": "0.1.2",
+        "version": "0.1.3",
         "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
         "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"),
         "sample_rate": 24000,
@@ -150,8 +148,6 @@ def speech(
         },
     }
 
-    # Only retry transport/server errors. 4xx responses (especially quota 429)
-    # are deterministic and retrying immediately just wastes quota / latency.
     last_error = ""
     for attempt in range(2):
         try:
@@ -197,11 +193,12 @@ def speech(
             pcm = _extract_pcm(payload)
             return Response(
                 content=pcm,
-                media_type="application/octet-stream",
+                media_type="audio/pcm",
                 headers={
                     "X-Audio-Format": "pcm_s16le",
                     "X-Sample-Rate": "24000",
                     "X-Channels": "1",
+                    "Cache-Control": "no-store",
                 },
             )
         except HTTPException:
