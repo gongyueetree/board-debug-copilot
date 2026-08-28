@@ -60,6 +60,17 @@
     return ctx;
   }
 
+  // All cloud-TTS fallbacks in LabSight ultimately call HTMLMediaElement.play().
+  // Route them through the chosen sink without every voice adapter having to know about the selector.
+  const nativePlay = HTMLMediaElement.prototype.play;
+  if (!HTMLMediaElement.prototype.__labsightSinkWrapped) {
+    Object.defineProperty(HTMLMediaElement.prototype, '__labsightSinkWrapped', { value: true });
+    HTMLMediaElement.prototype.play = async function(...args) {
+      await applyToElement(this);
+      return nativePlay.apply(this, args);
+    };
+  }
+
   async function testTone() {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
