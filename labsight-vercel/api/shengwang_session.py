@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.8")
+app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.9")
 API_BASE = "https://api.agora.io/cn/api/conversational-ai-agent/v2/projects"
 
 
@@ -26,11 +26,10 @@ class ShengwangSessionRequest(BaseModel):
     channel: str | None = None
     provider: str | None = None
     text: str | None = None
-    # gemini: real Gemini OpenAI-TTS bridge; probe: dependency-free PCM tone.
     tts_target: str | None = None
 
 
-def _first_env(*names: str, required: bool = True) -> str:
+def _env(*names: str, required: bool = True) -> str:
     for name in names:
         value = os.getenv(name, "").strip()
         if value:
@@ -40,19 +39,38 @@ def _first_env(*names: str, required: bool = True) -> str:
     return ""
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=f"环境变量 {name} 不是有效整数：{raw}") from exc
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=f"环境变量 {name} 不是有效数字：{raw}") from exc
+
+
 def _app_id() -> str:
-    return _first_env("SHENGWANG_APP_ID", "AGORA_APP_ID")
+    return _env("SHENGWANG_APP_ID", "AGORA_APP_ID")
 
 
 def _app_cert() -> str:
-    return _first_env("SHENGWANG_APP_CERTIFICATE", "AGORA_APP_CERTIFICATE")
+    return _env("SHENGWANG_APP_CERTIFICATE", "AGORA_APP_CERTIFICATE")
 
 
-def _basic_auth_header() -> str:
-    customer_id = _first_env("SHENGWANG_CUSTOMER_ID", "AGORA_CUSTOMER_ID")
-    customer_secret = _first_env("SHENGWANG_CUSTOMER_SECRET", "AGORA_CUSTOMER_SECRET")
-    raw = f"{customer_id}:{customer_secret}".encode("utf-8")
-    return "Basic " + base64.b64encode(raw).decode("ascii")
+def _auth() -> str:
+    customer_id = _env("SHENGWANG_CUSTOMER_ID", "AGORA_CUSTOMER_ID")
+    customer_secret = _env("SHENGWANG_CUSTOMER_SECRET", "AGORA_CUSTOMER_SECRET")
+    return "Basic " + base64.b64encode(f"{customer_id}:{customer_secret}".encode()).decode()
 
 
 def _pack_u16(value: int) -> bytes:
@@ -68,51 +86,36 @@ def _pack_string(value: bytes) -> bytes:
 
 
 def _pack_privileges(values: dict[int, int]) -> bytes:
-    ordered = sorted(values.items(), key=lambda item: item[0])
+    ordered = sorted(values.items())
     return _pack_u16(len(ordered)) + b"".join(_pack_u16(k) + _pack_u32(v) for k, v in ordered)
 
 
-def _validate_agora_secret(name: str, value: str) -> None:
+def _validate_hex32(name: str, value: str) -> None:
     if len(value) != 32:
         raise HTTPException(status_code=500, detail=f"{name} 长度应为 32 个十六进制字符")
     try:
         bytes.fromhex(value)
     except ValueError as exc:
-        raise HTTPException(status_code=500, detail=f"{name} 不是有效的十六进制字符串") from exc
+        raise HTTPException(status_code=500, detail=f"{name} 不是有效十六进制字符串") from exc
 
 
 def _rtc_token(app_id: str, app_cert: str, channel: str, uid: int, ttl: int = 3600) -> str:
-    """Generate Agora AccessToken2 / Token007 using the official wire format."""
-    _validate_agora_secret("SHENGWANG_APP_ID", app_id)
-    _validate_agora_secret("SHENGWANG_APP_CERTIFICATE", app_cert)
-    if not channel or len(channel.encode("utf-8")) >= 64:
-        raise HTTPException(status_code=500, detail="声网 channel 必须为 1~63 字节")
-    if uid < 0 or uid > 0xFFFFFFFF:
-        raise HTTPException(status_code=500, detail="声网 RTC uid 必须在 0~2^32-1 范围内")
-
+    _validate_hex32("SHENGWANG_APP_ID", app_id)
+    _validate_hex32("SHENGWANG_APP_CERTIFICATE", app_cert)
     issue_ts = int(time.time())
     salt = random.randint(1, 99_999_999)
-    privilege_expire = max(1, int(ttl))
+    expiry = max(1, int(ttl))
     service = (
         _pack_u16(1)
-        + _pack_privileges({1: privilege_expire, 2: privilege_expire, 3: privilege_expire, 4: privilege_expire})
-        + _pack_string(channel.encode("utf-8"))
-        + _pack_string(b"" if uid == 0 else str(uid).encode("utf-8"))
+        + _pack_privileges({1: expiry, 2: expiry, 3: expiry, 4: expiry})
+        + _pack_string(channel.encode())
+        + _pack_string(b"" if uid == 0 else str(uid).encode())
     )
-
-    cert_bytes = app_cert.encode("utf-8")
-    signing = hmac.new(_pack_u32(issue_ts), cert_bytes, sha256).digest()
+    signing = hmac.new(_pack_u32(issue_ts), app_cert.encode(), sha256).digest()
     signing = hmac.new(_pack_u32(salt), signing, sha256).digest()
-    signing_info = (
-        _pack_string(app_id.encode("utf-8"))
-        + _pack_u32(issue_ts)
-        + _pack_u32(max(1, int(ttl)))
-        + _pack_u32(salt)
-        + _pack_u16(1)
-        + service
-    )
-    signature = hmac.new(signing, signing_info, sha256).digest()
-    return "007" + base64.b64encode(zlib.compress(_pack_string(signature) + signing_info)).decode("ascii")
+    info = _pack_string(app_id.encode()) + _pack_u32(issue_ts) + _pack_u32(expiry) + _pack_u32(salt) + _pack_u16(1) + service
+    signature = hmac.new(signing, info, sha256).digest()
+    return "007" + base64.b64encode(zlib.compress(_pack_string(signature) + info)).decode()
 
 
 def _public_base_url() -> str:
@@ -129,15 +132,37 @@ def _public_base_url() -> str:
 
 
 def _custom_llm_url() -> str:
-    explicit = _first_env("SHENGWANG_CUSTOM_LLM_URL", "AGORA_CUSTOM_LLM_URL", required=False)
+    explicit = _env("SHENGWANG_CUSTOM_LLM_URL", "AGORA_CUSTOM_LLM_URL", required=False)
     if explicit:
         return explicit
     base = _public_base_url()
-    return base + "/api/agora_chat" if base else ""
+    return f"{base}/api/agora_chat" if base else ""
 
 
-def _custom_llm_key() -> str:
-    return _first_env("SHENGWANG_CUSTOM_LLM_API_KEY", "AGORA_CUSTOM_LLM_API_KEY", required=False) or _app_cert()
+def _build_llm(provider: str | None) -> dict[str, Any]:
+    url = _custom_llm_url()
+    selected = "gemini" if str(provider or "").lower() == "gemini" else "openai"
+    model = _env("SHENGWANG_CUSTOM_LLM_MODEL", "AGORA_CUSTOM_LLM_MODEL", required=False) or selected
+    if not url:
+        raise HTTPException(status_code=503, detail="无法确定声网自定义 LLM 公网 URL；请配置 LABSIGHT_PUBLIC_BASE_URL")
+    return {
+        "vendor": "custom",
+        "url": url,
+        "api_key": _env("SHENGWANG_CUSTOM_LLM_API_KEY", "AGORA_CUSTOM_LLM_API_KEY", required=False) or _app_cert(),
+        "system_messages": [{
+            "role": "system",
+            "content": "你是 LabSight 实时硬件调试助手。使用简体中文，先直接回答用户问题，再给必要下一步；不要重复问题，不要猜测当前不可见画面。",
+        }],
+        "greeting_message": "LabSight 已连接，我在听。",
+        "failure_message": "这个问题我暂时没有判断清楚，请再说一次。",
+        "max_history": 12,
+        "params": {
+            "model": model,
+            "stream": True,
+            "temperature": _env_float("SHENGWANG_LLM_TEMPERATURE", 0.3),
+            "max_tokens": _env_int("SHENGWANG_LLM_MAX_TOKENS", 220),
+        },
+    }
 
 
 def _tts_target(value: str | None) -> str:
@@ -147,129 +172,31 @@ def _tts_target(value: str | None) -> str:
     return target
 
 
-def _custom_tts_url(target: str = "gemini") -> str:
-    if target == "probe":
-        base = _public_base_url()
-        return base + "/api/tts_probe" if base else ""
-    explicit = os.getenv("SHENGWANG_TTS_URL", "").strip()
-    if explicit:
-        return explicit
-    base = _public_base_url()
-    return base + "/api/gemini_tts_openai" if base else ""
-
-
-def _env_float(name: str, fallback_name: str | None, default: float) -> float:
-    raw = os.getenv(name, "").strip() or (os.getenv(fallback_name, "").strip() if fallback_name else "")
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=f"环境变量 {name} 不是有效数字：{raw}") from exc
-
-
-def _env_int(name: str, fallback_name: str | None, default: int) -> int:
-    raw = os.getenv(name, "").strip() or (os.getenv(fallback_name, "").strip() if fallback_name else "")
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError as exc:
-        raise HTTPException(status_code=500, detail=f"环境变量 {name} 不是有效整数：{raw}") from exc
-
-
-def _llm_params(model: str) -> dict[str, Any]:
-    return {
-        "model": model,
-        "stream": True,
-        "temperature": _env_float("SHENGWANG_LLM_TEMPERATURE", "AGORA_LLM_TEMPERATURE", 0.3),
-        "max_tokens": _env_int("SHENGWANG_LLM_MAX_TOKENS", "AGORA_LLM_MAX_TOKENS", 220),
-    }
-
-
-def _build_llm(provider: str | None) -> dict[str, Any]:
-    url = _custom_llm_url()
-    selected = "gemini" if str(provider or "").lower() == "gemini" else "openai"
-    model = _first_env("SHENGWANG_CUSTOM_LLM_MODEL", "AGORA_CUSTOM_LLM_MODEL", required=False) or selected
-    if url:
-        return {
-            "vendor": "custom",
-            "url": url,
-            "api_key": _custom_llm_key(),
-            "system_messages": [{
-                "role": "system",
-                "content": (
-                    "你是 LabSight 实时硬件调试助手。始终使用简体中文，先给直接结论，再给必要的下一步。"
-                    "不要长篇播报，不要重复用户问题。器件型号、位号、引脚、网络名、协议和单位保持原样。"
-                    "当前语音通道如缺少当前画面或 KiCad 上下文，应明确说明需要视觉/工程文件证据，不要猜测。"
-                ),
-            }],
-            "greeting_message": "LabSight 已连接，我在听。",
-            "failure_message": "这个问题我暂时没有判断清楚，请再说一次。",
-            "max_history": 12,
-            "params": _llm_params(model),
-        }
-    return {
-        "vendor": os.getenv("SHENGWANG_LLM_VENDOR", os.getenv("AGORA_LLM_VENDOR", "deepseek")),
-        "url": os.getenv("SHENGWANG_LLM_URL", os.getenv("AGORA_LLM_URL", "")),
-        "api_key": os.getenv("SHENGWANG_LLM_API_KEY", ""),
-        "system_messages": [{"role": "system", "content": "你是 LabSight 实时硬件调试助手，始终用简体中文简洁回答。"}],
-        "greeting_message": "LabSight 已连接，我在听。",
-        "failure_message": "这个问题我暂时没有判断清楚，请再说一次。",
-        "max_history": 12,
-        "params": _llm_params(os.getenv("SHENGWANG_LLM_MODEL", os.getenv("AGORA_LLM_MODEL", "deepseek-chat"))),
-    }
-
-
 def _tts_mode() -> str:
-    # Gemini GenericTTS is the default path. MiniMax is retained only as an
-    # explicit optional fallback for users who already have those credentials.
     mode = os.getenv("SHENGWANG_TTS_MODE", "generic_http").strip().lower()
-    if mode not in {"generic_http", "minimax"}:
-        raise HTTPException(status_code=500, detail="SHENGWANG_TTS_MODE 仅支持 generic_http 或 minimax")
+    if mode != "generic_http":
+        raise HTTPException(status_code=500, detail="当前 LabSight EVT 仅启用 generic_http/Gemini TTS")
     return mode
 
 
-def _build_tts(target_value: str | None = None) -> dict[str, Any]:
-    mode = _tts_mode()
-    target = _tts_target(target_value)
+def _tts_url(target: str) -> str:
+    if target == "gemini":
+        explicit = os.getenv("SHENGWANG_TTS_URL", "").strip()
+        if explicit:
+            return explicit
+    base = _public_base_url()
+    if not base:
+        return ""
+    return f"{base}/api/tts_probe" if target == "probe" else f"{base}/api/gemini_tts_openai"
 
-    if mode == "minimax":
-        key = os.getenv("SHENGWANG_TTS_API_KEY", "").strip()
-        group_id = os.getenv("SHENGWANG_TTS_GROUP_ID", "").strip()
-        missing = [name for name, value in [
-            ("SHENGWANG_TTS_API_KEY", key),
-            ("SHENGWANG_TTS_GROUP_ID", group_id),
-        ] if not value]
-        if missing:
-            raise HTTPException(status_code=503, detail=f"MiniMax TTS 未配置：缺少 {', '.join(missing)}")
-        return {
-            "vendor": "minimax",
-            "params": {
-                "group_id": group_id,
-                "key": key,
-                "model": os.getenv("SHENGWANG_TTS_MODEL", "speech-01-turbo"),
-                "voice_setting": {
-                    "voice_id": os.getenv("SHENGWANG_TTS_VOICE_ID", "female-shaonv"),
-                    "speed": _env_float("SHENGWANG_TTS_SPEED", None, 1.0),
-                    "vol": _env_float("SHENGWANG_TTS_VOLUME", None, 1.0),
-                    "pitch": _env_int("SHENGWANG_TTS_PITCH", None, 0),
-                },
-                "audio_setting": {"sample_rate": _env_int("SHENGWANG_TTS_SAMPLE_RATE", None, 16000)},
-                "language_boost": os.getenv("SHENGWANG_TTS_LANGUAGE_BOOST", "auto"),
-            },
-        }
 
+def _build_tts(target: str) -> dict[str, Any]:
+    _tts_mode()
     if target == "gemini" and not os.getenv("GEMINI_API_KEY", "").strip():
-        raise HTTPException(status_code=503, detail="Gemini GenericTTS 模式需要 GEMINI_API_KEY")
-
-    url = _custom_tts_url(target)
+        raise HTTPException(status_code=503, detail="Gemini GenericTTS 需要 GEMINI_API_KEY")
+    url = _tts_url(target)
     if not url:
-        raise HTTPException(status_code=503, detail=f"无法确定 {target} GenericTTS 公网 URL")
-
-    # REST v2.10: tts.url and tts.headers are top-level fields; GenericTTS
-    # protocol parameters live in tts.params. Probe and Gemini deliberately use
-    # identical protocol settings, so the only changing variable is the endpoint.
+        raise HTTPException(status_code=503, detail="无法确定 GenericTTS 公网 URL")
     params: dict[str, Any] = {
         "model": "labsight-tts-probe" if target == "probe" else os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
         "voice": "probe" if target == "probe" else os.getenv("GEMINI_TTS_VOICE", "Kore"),
@@ -278,25 +205,21 @@ def _build_tts(target_value: str | None = None) -> dict[str, Any]:
         "response_format": "pcm",
     }
     if target == "gemini":
-        params["instruction"] = os.getenv(
-            "SHENGWANG_TTS_INSTRUCTION",
-            "使用自然、清晰、专业但简洁的普通话播报，技术型号和单位准确朗读。",
-        )
-
+        params["instruction"] = os.getenv("SHENGWANG_TTS_INSTRUCTION", "使用自然、清晰、专业但简洁的普通话播报。")
     tts: dict[str, Any] = {"vendor": "generic_http", "url": url, "params": params}
-    custom_key = os.getenv("SHENGWANG_CUSTOM_TTS_API_KEY", "").strip()
-    if custom_key and target == "gemini":
-        tts["headers"] = {"Authorization": f"Bearer {custom_key}"}
+    key = os.getenv("SHENGWANG_CUSTOM_TTS_API_KEY", "").strip()
+    if key and target == "gemini":
+        tts["headers"] = {"Authorization": f"Bearer {key}"}
     return tts
 
 
-def _request(method: str, url: str, *, json_body: dict[str, Any] | None = None, timeout: int = 25) -> requests.Response:
+def _request(method: str, url: str, body: dict[str, Any] | None = None, timeout: int = 25) -> requests.Response:
     try:
         response = requests.request(
             method,
             url,
-            headers={"Authorization": _basic_auth_header(), "Content-Type": "application/json"},
-            json=json_body,
+            headers={"Authorization": _auth(), "Content-Type": "application/json"},
+            json=body,
             timeout=timeout,
         )
     except requests.RequestException as exc:
@@ -307,148 +230,111 @@ def _request(method: str, url: str, *, json_body: dict[str, Any] | None = None, 
 
 
 def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
-    app_id = _app_id()
-    app_cert = _app_cert()
-    prefix = os.getenv("SHENGWANG_CHANNEL_PREFIX", "labsight-voice")
-    channel = req.channel or f"{prefix}-{uuid.uuid4().hex[:10]}"
+    app_id, app_cert = _app_id(), _app_cert()
+    channel = req.channel or f"{os.getenv('SHENGWANG_CHANNEL_PREFIX', 'labsight-voice')}-{uuid.uuid4().hex[:10]}"
     user_uid = random.randint(100000, 999999)
-
-    configured_agent_uid = _env_int("SHENGWANG_AGENT_UID", None, 0)
-    agent_uid = configured_agent_uid if configured_agent_uid > 0 else random.randint(1_000_000, 1_999_999)
+    agent_uid = random.randint(1_000_000, 1_999_999)
     while agent_uid == user_uid:
         agent_uid = random.randint(1_000_000, 1_999_999)
 
-    user_token = _rtc_token(app_id, app_cert, channel, user_uid)
-    agent_token = _rtc_token(app_id, app_cert, channel, agent_uid)
-
-    silence_ms = _env_int("SHENGWANG_SEMANTIC_SILENCE_MS", None, 240)
-    max_wait_ms = _env_int("SHENGWANG_SEMANTIC_MAX_WAIT_MS", None, 3000)
-    interrupt_ms = _env_int("SHENGWANG_INTERRUPT_MS", None, 180)
-    speaking_interrupt_ms = _env_int("SHENGWANG_SPEAKING_INTERRUPT_MS", None, 220)
     target = _tts_target(req.tts_target)
-    tts_config = _build_tts(target)
+    threshold = min(0.95, max(0.05, _env_float("SHENGWANG_SPEECH_THRESHOLD", 0.20)))
+    sos_ms = max(120, min(1200, _env_int("SHENGWANG_INTERRUPT_MS", 160)))
+    speaking_sos_ms = max(120, min(1200, _env_int("SHENGWANG_SPEAKING_INTERRUPT_MS", 220)))
+    prefix_ms = max(0, min(5000, _env_int("SHENGWANG_PREFIX_PADDING_MS", 800)))
+    eos_mode = os.getenv("SHENGWANG_EOS_MODE", "vad").strip().lower()
+    if eos_mode not in {"vad", "semantic"}:
+        eos_mode = "vad"
+    silence_ms = max(120, min(2000, _env_int("SHENGWANG_VAD_SILENCE_MS", 600)))
+    semantic_silence_ms = max(120, min(2000, _env_int("SHENGWANG_SEMANTIC_SILENCE_MS", 240)))
+    max_wait_ms = max(300, _env_int("SHENGWANG_SEMANTIC_MAX_WAIT_MS", 3000))
+
+    end_of_speech: dict[str, Any]
+    if eos_mode == "semantic":
+        end_of_speech = {
+            "mode": "semantic",
+            "semantic_config": {
+                "silence_duration_ms": semantic_silence_ms,
+                "max_wait_ms": max_wait_ms,
+                "pause_state_enabled": True,
+            },
+        }
+    else:
+        end_of_speech = {"mode": "vad", "vad_config": {"silence_duration_ms": silence_ms}}
 
     properties: dict[str, Any] = {
         "channel": channel,
-        "token": agent_token,
+        "token": _rtc_token(app_id, app_cert, channel, agent_uid),
         "agent_rtc_uid": str(agent_uid),
         "remote_rtc_uids": [str(user_uid)],
         "enable_string_uid": False,
-        "idle_timeout": _env_int("SHENGWANG_IDLE_TIMEOUT", None, 180),
+        "idle_timeout": _env_int("SHENGWANG_IDLE_TIMEOUT", 180),
         "asr": {
             "language": os.getenv("SHENGWANG_ASR_LANGUAGE", "zh-CN"),
             "vendor": os.getenv("SHENGWANG_ASR_VENDOR", "fengming"),
-            "keywords": ["LabSight", "ezPLM", "KiCad", "PCB", "FPGA", "RP2040", "RP2350", "ADALM2000", "示波器", "逻辑分析仪", "信号发生器", "电源纹波", "焊点", "丝印", "位号"],
         },
         "turn_detection": {
             "mode": "default",
             "config": {
+                "speech_threshold": threshold,
                 "start_of_speech": {
                     "mode": "vad",
                     "vad_config": {
-                        "interrupt_duration_ms": interrupt_ms,
-                        "speaking_interrupt_duration_ms": speaking_interrupt_ms,
-                        "prefix_padding_ms": _env_int("SHENGWANG_PREFIX_PADDING_MS", None, 600),
+                        "interrupt_duration_ms": sos_ms,
+                        "speaking_interrupt_duration_ms": speaking_sos_ms,
+                        "prefix_padding_ms": prefix_ms,
                     },
                 },
-                "end_of_speech": {
-                    "mode": "semantic",
-                    "semantic_config": {"silence_duration_ms": silence_ms, "max_wait_ms": max_wait_ms},
-                },
+                "end_of_speech": end_of_speech,
             },
         },
         "interruption": {"enable": True, "mode": "start_of_speech"},
         "llm": _build_llm(req.provider),
-        "tts": tts_config,
-        "parameters": {"data_channel": "datastream", "enable_error_message": True},
+        "tts": _build_tts(target),
+        "parameters": {
+            "data_channel": "datastream",
+            "enable_error_message": True,
+            "audio_scenario": "default",
+        },
     }
 
     payload = {"name": f"labsight-{target}-{uuid.uuid4().hex[:10]}", "properties": properties}
-    response = _request("POST", f"{API_BASE}/{app_id}/join", json_body=payload)
-    try:
-        data = response.json()
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"声网创建智能体返回了非 JSON：{response.text[:1200]}") from exc
+    response = _request("POST", f"{API_BASE}/{app_id}/join", payload)
+    data = response.json()
+    if data.get("status") == "FAILED":
+        raise HTTPException(status_code=502, detail=f"声网智能体启动失败：{data}")
 
-    status = data.get("status", "UNKNOWN")
-    if status == "FAILED":
-        raise HTTPException(status_code=502, detail=f"声网智能体启动后立即失败：{data}")
-
-    params = tts_config.get("params") or {}
     return {
         "ok": True,
         "mode": "shengwang_realtime_voice",
         "app_id": app_id,
         "channel": channel,
         "uid": user_uid,
-        "rtc_token": user_token,
+        "rtc_token": _rtc_token(app_id, app_cert, channel, user_uid),
         "agent_uid": agent_uid,
         "agent_id": data.get("agent_id"),
-        "agent_status": status,
-        "turn_detection": {"mode": "semantic", "silence_ms": silence_ms, "max_wait_ms": max_wait_ms},
-        "asr": {"vendor": os.getenv("SHENGWANG_ASR_VENDOR", "fengming"), "language": os.getenv("SHENGWANG_ASR_LANGUAGE", "zh-CN")},
-        "tts": {
-            "vendor": tts_config.get("vendor"),
-            "mode": _tts_mode(),
-            "target": target,
-            "model": params.get("model"),
-            "voice": (params.get("voice_setting") or {}).get("voice_id") or params.get("voice"),
-            "sample_rate": (params.get("audio_setting") or {}).get("sample_rate") or params.get("sample_rate"),
-            "url": tts_config.get("url"),
+        "agent_status": data.get("status", "UNKNOWN"),
+        "asr": {"vendor": properties["asr"]["vendor"], "language": properties["asr"]["language"]},
+        "turn_detection": {
+            "speech_threshold": threshold,
+            "sos_ms": sos_ms,
+            "prefix_ms": prefix_ms,
+            "eos_mode": eos_mode,
+            "silence_ms": silence_ms if eos_mode == "vad" else semantic_silence_ms,
         },
+        "tts": {"vendor": "generic_http", "target": target, "url": _tts_url(target)},
     }
 
 
-def _stop(req: ShengwangSessionRequest) -> dict[str, Any]:
-    if not req.agent_id:
-        return {"ok": True, "stopped": False, "reason": "missing_agent_id"}
-    response = _request("POST", f"{API_BASE}/{_app_id()}/agents/{req.agent_id}/leave", json_body={})
-    try:
-        data = response.json()
-    except Exception:
-        data = {}
-    return {"ok": True, "stopped": True, "agent_id": req.agent_id, "response": data}
-
-
-def _interrupt(req: ShengwangSessionRequest) -> dict[str, Any]:
+def _agent_action(req: ShengwangSessionRequest, endpoint: str, body: dict[str, Any]) -> dict[str, Any]:
     if not req.agent_id:
         raise HTTPException(status_code=400, detail="缺少 agent_id")
-    response = _request("POST", f"{API_BASE}/{_app_id()}/agents/{req.agent_id}/interrupt", json_body={})
+    response = _request("POST", f"{API_BASE}/{_app_id()}/agents/{req.agent_id}/{endpoint}", body)
     try:
         data = response.json()
     except Exception:
         data = {}
-    return {"ok": True, "interrupted": True, "agent_id": req.agent_id, "response": data}
-
-
-def _speak(req: ShengwangSessionRequest) -> dict[str, Any]:
-    if not req.agent_id:
-        raise HTTPException(status_code=400, detail="缺少 agent_id")
-    text = (req.text or "LabSight 实时语音连接成功。你可以开始说话。").strip()
-    if not text:
-        raise HTTPException(status_code=400, detail="缺少播报文本")
-    response = _request(
-        "POST",
-        f"{API_BASE}/{_app_id()}/agents/{req.agent_id}/speak",
-        json_body={"text": text},
-    )
-    try:
-        data = response.json()
-    except Exception:
-        data = {}
-    return {"ok": True, "spoken": True, "agent_id": req.agent_id, "response": data}
-
-
-def _tts_missing() -> list[str]:
-    if _tts_mode() == "minimax":
-        required = ["SHENGWANG_TTS_API_KEY", "SHENGWANG_TTS_GROUP_ID"]
-        return [key for key in required if not os.getenv(key, "").strip()]
-    missing: list[str] = []
-    if not os.getenv("GEMINI_API_KEY", "").strip():
-        missing.append("GEMINI_API_KEY")
-    if not _custom_tts_url("gemini"):
-        missing.append("SHENGWANG_TTS_URL/LABSIGHT_PUBLIC_BASE_URL")
-    return missing
+    return {"ok": True, "agent_id": req.agent_id, "response": data}
 
 
 @app.get("/api/shengwang_session")
@@ -457,16 +343,19 @@ def health() -> dict[str, Any]:
     for key in ["SHENGWANG_APP_ID", "SHENGWANG_APP_CERTIFICATE", "SHENGWANG_CUSTOMER_ID", "SHENGWANG_CUSTOMER_SECRET"]:
         if not os.getenv(key, "").strip() and not os.getenv(key.replace("SHENGWANG_", "AGORA_"), "").strip():
             missing.append(key)
-    missing.extend(_tts_missing())
+    if not os.getenv("GEMINI_API_KEY", "").strip():
+        missing.append("GEMINI_API_KEY")
     return {
         "ok": True,
         "service": "labsight-shengwang-session",
-        "version": "0.10.8",
+        "version": "0.10.9",
         "configured": not missing,
         "missing": missing,
-        "tts_mode": _tts_mode(),
-        "gemini_tts_url": _custom_tts_url("gemini") if _tts_mode() == "generic_http" else None,
-        "probe_tts_url": _custom_tts_url("probe") if _tts_mode() == "generic_http" else None,
+        "tts_mode": "generic_http",
+        "speech_threshold": min(0.95, max(0.05, _env_float("SHENGWANG_SPEECH_THRESHOLD", 0.20))),
+        "eos_mode": os.getenv("SHENGWANG_EOS_MODE", "vad"),
+        "gemini_tts_url": _tts_url("gemini"),
+        "probe_tts_url": _tts_url("probe"),
     }
 
 
@@ -476,9 +365,12 @@ def action(req: ShengwangSessionRequest) -> JSONResponse:
     if action_name == "start":
         return JSONResponse(_start(req))
     if action_name == "stop":
-        return JSONResponse(_stop(req))
+        if not req.agent_id:
+            return JSONResponse({"ok": True, "stopped": False})
+        return JSONResponse(_agent_action(req, "leave", {}))
     if action_name == "interrupt":
-        return JSONResponse(_interrupt(req))
+        return JSONResponse(_agent_action(req, "interrupt", {}))
     if action_name == "speak":
-        return JSONResponse(_speak(req))
+        text = (req.text or "LabSight 实时语音连接成功。你可以开始说话。").strip()
+        return JSONResponse(_agent_action(req, "speak", {"text": text}))
     raise HTTPException(status_code=400, detail=f"未知 action: {req.action}")
