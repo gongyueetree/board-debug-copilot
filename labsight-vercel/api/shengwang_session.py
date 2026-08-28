@@ -12,7 +12,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.2")
+app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.3")
 
 API_BASE = "https://api.agora.io/cn/api/conversational-ai-agent/v2/projects"
 
@@ -50,23 +50,15 @@ def _basic_auth_header() -> str:
 
 
 def _rtc_token(app_id: str, app_cert: str, channel: str, uid: int, ttl: int = 3600) -> str:
-    """Import the token builder lazily so a packaging/runtime issue cannot crash the whole Vercel function at import time."""
     try:
         from agora_token_builder import RtcTokenBuilder
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"声网 RTC Token Builder 加载失败：{type(exc).__name__}: {exc}",
-        ) from exc
-
+        raise HTTPException(status_code=500, detail=f"声网 RTC Token Builder 加载失败：{type(exc).__name__}: {exc}") from exc
     try:
         expire_ts = int(time.time()) + ttl
         return RtcTokenBuilder.buildTokenWithUid(app_id, app_cert, channel, uid, 1, expire_ts)
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail=f"生成声网 RTC Token 失败：{type(exc).__name__}: {exc}",
-        ) from exc
+        raise HTTPException(status_code=500, detail=f"生成声网 RTC Token 失败：{type(exc).__name__}: {exc}") from exc
 
 
 def _public_base_url() -> str:
@@ -91,10 +83,15 @@ def _custom_llm_url() -> str:
 
 
 def _custom_llm_key() -> str:
-    return (
-        _first_env("SHENGWANG_CUSTOM_LLM_API_KEY", "AGORA_CUSTOM_LLM_API_KEY", required=False)
-        or _app_cert()
-    )
+    return _first_env("SHENGWANG_CUSTOM_LLM_API_KEY", "AGORA_CUSTOM_LLM_API_KEY", required=False) or _app_cert()
+
+
+def _custom_tts_url() -> str:
+    explicit = os.getenv("SHENGWANG_TTS_URL", "").strip()
+    if explicit:
+        return explicit
+    base = _public_base_url()
+    return base + "/api/gemini_tts_openai" if base else ""
 
 
 def _env_float(name: str, fallback_name: str | None, default: float) -> float:
@@ -139,22 +136,19 @@ def _build_llm(provider: str | None) -> dict[str, Any]:
             "vendor": "custom",
             "url": url,
             "api_key": _custom_llm_key(),
-            "system_messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "你是 LabSight 实时硬件调试助手。始终使用简体中文，先给直接结论，再给必要的下一步。"
-                        "不要长篇播报，不要重复用户问题。器件型号、位号、引脚、网络名、协议和单位保持原样。"
-                        "当前语音通道如缺少当前画面或 KiCad 上下文，应明确说明需要视觉/工程文件证据，不要猜测。"
-                    ),
-                }
-            ],
+            "system_messages": [{
+                "role": "system",
+                "content": (
+                    "你是 LabSight 实时硬件调试助手。始终使用简体中文，先给直接结论，再给必要的下一步。"
+                    "不要长篇播报，不要重复用户问题。器件型号、位号、引脚、网络名、协议和单位保持原样。"
+                    "当前语音通道如缺少当前画面或 KiCad 上下文，应明确说明需要视觉/工程文件证据，不要猜测。"
+                ),
+            }],
             "greeting_message": "LabSight 已连接，我在听。",
             "failure_message": "这个问题我暂时没有判断清楚，请再说一次。",
             "max_history": 12,
             "params": _llm_params(model),
         }
-
     return {
         "vendor": os.getenv("SHENGWANG_LLM_VENDOR", os.getenv("AGORA_LLM_VENDOR", "deepseek")),
         "url": os.getenv("SHENGWANG_LLM_URL", os.getenv("AGORA_LLM_URL", "")),
@@ -168,34 +162,20 @@ def _build_llm(provider: str | None) -> dict[str, Any]:
 
 
 def _build_tts() -> dict[str, Any]:
-    vendor = os.getenv("SHENGWANG_TTS_VENDOR", os.getenv("AGORA_TTS_VENDOR", "minimax")).strip().lower()
-    model = os.getenv("SHENGWANG_TTS_MODEL", os.getenv("AGORA_TTS_MODEL", "speech-2.6-turbo"))
-    if vendor == "minimax":
-        key = os.getenv("SHENGWANG_TTS_API_KEY", "").strip()
-        if not key:
-            raise HTTPException(status_code=503, detail="未配置 SHENGWANG_TTS_API_KEY")
-        params: dict[str, Any] = {
-            "key": key,
-            "model": model,
-            "voice_setting": {
-                "voice_id": os.getenv("SHENGWANG_TTS_VOICE_ID", "female-shaonv"),
-                "speed": _env_float("SHENGWANG_TTS_SPEED", None, 1.05),
-                "vol": 1,
-                "pitch": 0,
-            },
-            "audio_setting": {"sample_rate": _env_int("SHENGWANG_TTS_SAMPLE_RATE", None, 16000)},
-        }
-        group_id = os.getenv("SHENGWANG_TTS_GROUP_ID", "").strip()
-        if group_id:
-            params["group_id"] = group_id
-        return {"vendor": "minimax", "params": params}
+    if not os.getenv("GEMINI_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="未配置 GEMINI_API_KEY")
+    url = _custom_tts_url()
+    if not url:
+        raise HTTPException(status_code=503, detail="无法确定 Gemini TTS Bridge 地址，请配置 LABSIGHT_PUBLIC_BASE_URL 或 SHENGWANG_TTS_URL")
     return {
-        "vendor": vendor,
+        "vendor": "generic_http",
         "params": {
-            "url": os.getenv("SHENGWANG_TTS_URL", ""),
-            "key": os.getenv("SHENGWANG_TTS_API_KEY", ""),
-            "model": model,
-            "voice": os.getenv("SHENGWANG_TTS_VOICE", ""),
+            "url": url,
+            "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
+            "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"),
+            "sample_rate": 24000,
+            "response_format": "pcm",
+            "instruction": os.getenv("SHENGWANG_TTS_INSTRUCTION", "使用自然、清晰、专业但简洁的普通话播报，技术型号和单位准确朗读。"),
         },
     }
 
@@ -241,10 +221,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "asr": {
             "language": os.getenv("SHENGWANG_ASR_LANGUAGE", "zh-CN"),
             "vendor": os.getenv("SHENGWANG_ASR_VENDOR", "fengming"),
-            "keywords": [
-                "LabSight", "ezPLM", "KiCad", "PCB", "FPGA", "RP2040", "RP2350", "ADALM2000",
-                "示波器", "逻辑分析仪", "信号发生器", "电源纹波", "焊点", "丝印", "位号",
-            ],
+            "keywords": ["LabSight", "ezPLM", "KiCad", "PCB", "FPGA", "RP2040", "RP2350", "ADALM2000", "示波器", "逻辑分析仪", "信号发生器", "电源纹波", "焊点", "丝印", "位号"],
         },
         "turn_detection": {
             "mode": "default",
@@ -259,22 +236,14 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
                 },
                 "end_of_speech": {
                     "mode": "semantic",
-                    "semantic_config": {
-                        "silence_duration_ms": silence_ms,
-                        "max_wait_ms": max_wait_ms,
-                    },
+                    "semantic_config": {"silence_duration_ms": silence_ms, "max_wait_ms": max_wait_ms},
                 },
             },
         },
-        "interruption": {
-            "enable": True,
-            "mode": "start_of_speech",
-        },
+        "interruption": {"enable": True, "mode": "start_of_speech"},
         "llm": _build_llm(req.provider),
         "tts": _build_tts(),
-        "parameters": {
-            "data_channel": "datastream",
-        },
+        "parameters": {"data_channel": "datastream"},
     }
 
     payload = {"name": f"labsight-{uuid.uuid4().hex[:12]}", "properties": properties}
@@ -295,6 +264,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "agent_status": data.get("status", "RUNNING"),
         "turn_detection": {"mode": "semantic", "silence_ms": silence_ms, "max_wait_ms": max_wait_ms},
         "asr": {"vendor": os.getenv("SHENGWANG_ASR_VENDOR", "fengming"), "language": os.getenv("SHENGWANG_ASR_LANGUAGE", "zh-CN")},
+        "tts": {"vendor": "generic_http", "provider": "gemini", "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"), "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"), "sample_rate": 24000},
     }
 
 
@@ -325,16 +295,24 @@ def _interrupt(req: ShengwangSessionRequest) -> dict[str, Any]:
 @app.get("/api/shengwang_session")
 def shengwang_session_health():
     missing = []
-    for name in (
-        "SHENGWANG_APP_ID",
-        "SHENGWANG_APP_CERTIFICATE",
-        "SHENGWANG_CUSTOMER_ID",
-        "SHENGWANG_CUSTOMER_SECRET",
-        "SHENGWANG_TTS_API_KEY",
-    ):
+    for name in ("SHENGWANG_APP_ID", "SHENGWANG_APP_CERTIFICATE", "SHENGWANG_CUSTOMER_ID", "SHENGWANG_CUSTOMER_SECRET", "GEMINI_API_KEY"):
         if not os.getenv(name, "").strip():
             missing.append(name)
-    return {"ok": True, "service": "shengwang-session", "version": "0.10.2", "configured": not missing, "missing": missing}
+    return {
+        "ok": True,
+        "service": "shengwang-session",
+        "version": "0.10.3",
+        "configured": not missing,
+        "missing": missing,
+        "tts": {
+            "vendor": "generic_http",
+            "provider": "gemini",
+            "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
+            "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"),
+            "sample_rate": 24000,
+            "url": _custom_tts_url() or None,
+        },
+    }
 
 
 @app.post("/api/shengwang_session")
@@ -351,11 +329,4 @@ def shengwang_session(req: ShengwangSessionRequest):
     except HTTPException:
         raise
     except Exception as exc:
-        # Keep Vercel from turning a Python exception into opaque FUNCTION_INVOCATION_FAILED.
-        return JSONResponse(
-            status_code=500,
-            content={
-                "ok": False,
-                "detail": f"声网会话内部错误：{type(exc).__name__}: {exc}",
-            },
-        )
+        return JSONResponse(status_code=500, content={"ok": False, "detail": f"声网会话内部错误：{type(exc).__name__}: {exc}"})
