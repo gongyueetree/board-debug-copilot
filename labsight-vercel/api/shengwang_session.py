@@ -16,8 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.4")
-
+app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.5")
 API_BASE = "https://api.agora.io/cn/api/conversational-ai-agent/v2/projects"
 
 
@@ -26,6 +25,7 @@ class ShengwangSessionRequest(BaseModel):
     agent_id: str | None = None
     channel: str | None = None
     provider: str | None = None
+    text: str | None = None
 
 
 def _first_env(*names: str, required: bool = True) -> str:
@@ -80,11 +80,7 @@ def _validate_agora_secret(name: str, value: str) -> None:
 
 
 def _rtc_token(app_id: str, app_cert: str, channel: str, uid: int, ttl: int = 3600) -> str:
-    """Generate Agora/声网 AccessToken2 (Token007) without a third-party Python package.
-
-    This follows Agora's official AccessToken2/RtcTokenBuilder2 wire format so
-    Vercel does not depend on the legacy `agora-token-builder` PyPI package.
-    """
+    """Generate Agora AccessToken2 / Token007 using the official wire format."""
     _validate_agora_secret("SHENGWANG_APP_ID", app_id)
     _validate_agora_secret("SHENGWANG_APP_CERTIFICATE", app_cert)
     if not channel or len(channel.encode("utf-8")) >= 64:
@@ -94,10 +90,6 @@ def _rtc_token(app_id: str, app_cert: str, channel: str, uid: int, ttl: int = 36
 
     issue_ts = int(time.time())
     salt = random.randint(1, 99_999_999)
-    app_id_bytes = app_id.encode("utf-8")
-    cert_bytes = app_cert.encode("utf-8")
-
-    # ServiceRtc = service type 1. Publisher privileges: join/audio/video/data.
     privilege_expire = max(1, int(ttl))
     service = (
         _pack_u16(1)
@@ -106,10 +98,11 @@ def _rtc_token(app_id: str, app_cert: str, channel: str, uid: int, ttl: int = 36
         + _pack_string(b"" if uid == 0 else str(uid).encode("utf-8"))
     )
 
+    cert_bytes = app_cert.encode("utf-8")
     signing = hmac.new(_pack_u32(issue_ts), cert_bytes, sha256).digest()
     signing = hmac.new(_pack_u32(salt), signing, sha256).digest()
     signing_info = (
-        _pack_string(app_id_bytes)
+        _pack_string(app_id.encode("utf-8"))
         + _pack_u32(issue_ts)
         + _pack_u32(max(1, int(ttl)))
         + _pack_u32(salt)
@@ -117,8 +110,7 @@ def _rtc_token(app_id: str, app_cert: str, channel: str, uid: int, ttl: int = 36
         + service
     )
     signature = hmac.new(signing, signing_info, sha256).digest()
-    raw = _pack_string(signature) + signing_info
-    return "007" + base64.b64encode(zlib.compress(raw)).decode("ascii")
+    return "007" + base64.b64encode(zlib.compress(_pack_string(signature) + signing_info)).decode("ascii")
 
 
 def _public_base_url() -> str:
@@ -155,9 +147,7 @@ def _custom_tts_url() -> str:
 
 
 def _env_float(name: str, fallback_name: str | None, default: float) -> float:
-    raw = os.getenv(name, "").strip()
-    if not raw and fallback_name:
-        raw = os.getenv(fallback_name, "").strip()
+    raw = os.getenv(name, "").strip() or (os.getenv(fallback_name, "").strip() if fallback_name else "")
     if not raw:
         return default
     try:
@@ -167,9 +157,7 @@ def _env_float(name: str, fallback_name: str | None, default: float) -> float:
 
 
 def _env_int(name: str, fallback_name: str | None, default: int) -> int:
-    raw = os.getenv(name, "").strip()
-    if not raw and fallback_name:
-        raw = os.getenv(fallback_name, "").strip()
+    raw = os.getenv(name, "").strip() or (os.getenv(fallback_name, "").strip() if fallback_name else "")
     if not raw:
         return default
     try:
@@ -227,17 +215,18 @@ def _build_tts() -> dict[str, Any]:
     url = _custom_tts_url()
     if not url:
         raise HTTPException(status_code=503, detail="无法确定 Gemini TTS Bridge 地址，请配置 LABSIGHT_PUBLIC_BASE_URL 或 SHENGWANG_TTS_URL")
-    return {
-        "vendor": "generic_http",
-        "params": {
-            "url": url,
-            "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
-            "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"),
-            "sample_rate": 24000,
-            "response_format": "pcm",
-            "instruction": os.getenv("SHENGWANG_TTS_INSTRUCTION", "使用自然、清晰、专业但简洁的普通话播报，技术型号和单位准确朗读。"),
-        },
+    params: dict[str, Any] = {
+        "url": url,
+        "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
+        "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"),
+        "sample_rate": 24000,
+        "response_format": "pcm",
+        "instruction": os.getenv("SHENGWANG_TTS_INSTRUCTION", "使用自然、清晰、专业但简洁的普通话播报，技术型号和单位准确朗读。"),
     }
+    custom_key = os.getenv("SHENGWANG_CUSTOM_TTS_API_KEY", "").strip()
+    if custom_key:
+        params["api_key"] = custom_key
+    return {"vendor": "generic_http", "params": params}
 
 
 def _request(method: str, url: str, *, json_body: dict[str, Any] | None = None, timeout: int = 25) -> requests.Response:
@@ -262,7 +251,13 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
     prefix = os.getenv("SHENGWANG_CHANNEL_PREFIX", "labsight-voice")
     channel = req.channel or f"{prefix}-{uuid.uuid4().hex[:10]}"
     user_uid = random.randint(100000, 999999)
-    agent_uid = _env_int("SHENGWANG_AGENT_UID", None, 0)
+
+    configured_agent_uid = _env_int("SHENGWANG_AGENT_UID", None, 0)
+    # Avoid the special UID=0/random-assignment path while debugging the RTC chain.
+    agent_uid = configured_agent_uid if configured_agent_uid > 0 else random.randint(1_000_000, 1_999_999)
+    while agent_uid == user_uid:
+        agent_uid = random.randint(1_000_000, 1_999_999)
+
     user_token = _rtc_token(app_id, app_cert, channel, user_uid)
     agent_token = _rtc_token(app_id, app_cert, channel, agent_uid)
 
@@ -312,6 +307,11 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         data = response.json()
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"声网创建智能体返回了非 JSON：{response.text[:1200]}") from exc
+
+    status = data.get("status", "UNKNOWN")
+    if status == "FAILED":
+        raise HTTPException(status_code=502, detail=f"声网智能体启动后立即失败：{data}")
+
     return {
         "ok": True,
         "mode": "shengwang_realtime_voice",
@@ -321,7 +321,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "rtc_token": user_token,
         "agent_uid": agent_uid,
         "agent_id": data.get("agent_id"),
-        "agent_status": data.get("status", "RUNNING"),
+        "agent_status": status,
         "turn_detection": {"mode": "semantic", "silence_ms": silence_ms, "max_wait_ms": max_wait_ms},
         "asr": {"vendor": os.getenv("SHENGWANG_ASR_VENDOR", "fengming"), "language": os.getenv("SHENGWANG_ASR_LANGUAGE", "zh-CN")},
         "tts": {"vendor": "generic_http", "provider": "gemini", "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"), "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"), "sample_rate": 24000},
@@ -331,8 +331,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
 def _stop(req: ShengwangSessionRequest) -> dict[str, Any]:
     if not req.agent_id:
         return {"ok": True, "stopped": False, "reason": "missing_agent_id"}
-    app_id = _app_id()
-    response = _request("POST", f"{API_BASE}/{app_id}/agents/{req.agent_id}/leave", json_body={})
+    response = _request("POST", f"{API_BASE}/{_app_id()}/agents/{req.agent_id}/leave", json_body={})
     try:
         data = response.json()
     except Exception:
@@ -343,13 +342,30 @@ def _stop(req: ShengwangSessionRequest) -> dict[str, Any]:
 def _interrupt(req: ShengwangSessionRequest) -> dict[str, Any]:
     if not req.agent_id:
         raise HTTPException(status_code=400, detail="缺少 agent_id")
-    app_id = _app_id()
-    response = _request("POST", f"{API_BASE}/{app_id}/agents/{req.agent_id}/interrupt", json_body={})
+    response = _request("POST", f"{API_BASE}/{_app_id()}/agents/{req.agent_id}/interrupt", json_body={})
     try:
         data = response.json()
     except Exception:
         data = {}
     return {"ok": True, "interrupted": True, "agent_id": req.agent_id, "response": data}
+
+
+def _speak(req: ShengwangSessionRequest) -> dict[str, Any]:
+    if not req.agent_id:
+        raise HTTPException(status_code=400, detail="缺少 agent_id")
+    text = (req.text or "LabSight 实时语音连接成功。你可以开始说话。").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="缺少播报文本")
+    response = _request(
+        "POST",
+        f"{API_BASE}/{_app_id()}/agents/{req.agent_id}/speak",
+        json_body={"text": text, "priority": "INTERRUPT", "interruptable": True},
+    )
+    try:
+        data = response.json()
+    except Exception:
+        data = {}
+    return {"ok": True, "spoken": True, "agent_id": req.agent_id, "response": data}
 
 
 @app.get("/api/shengwang_session")
@@ -361,10 +377,11 @@ def shengwang_session_health():
     return {
         "ok": True,
         "service": "shengwang-session",
-        "version": "0.10.4",
+        "version": "0.10.5",
         "configured": not missing,
         "missing": missing,
         "token_builder": "builtin-access-token2",
+        "diagnostic_speak": True,
         "tts": {
             "vendor": "generic_http",
             "provider": "gemini",
@@ -386,7 +403,9 @@ def shengwang_session(req: ShengwangSessionRequest):
             return _stop(req)
         if action == "interrupt":
             return _interrupt(req)
-        raise HTTPException(status_code=400, detail="action 仅支持 start/stop/interrupt")
+        if action == "speak":
+            return _speak(req)
+        raise HTTPException(status_code=400, detail="action 仅支持 start/stop/interrupt/speak")
     except HTTPException:
         raise
     except Exception as exc:
