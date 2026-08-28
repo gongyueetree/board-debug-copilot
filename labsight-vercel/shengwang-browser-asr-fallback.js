@@ -1,7 +1,7 @@
 (() => {
-  // Browser-side ASR fallback for Shengwang realtime voice.
-  // Speech is transcribed in-browser/server, then visual questions are answered
-  // against the current LabSight camera frame before being spoken through Shengwang.
+  // Browser-side ASR input for Shengwang realtime voice.
+  // Voice questions are transcribed first; when a camera frame is available they
+  // are answered by LabSight Vision, then spoken through Shengwang/Gemini TTS.
   const bar = document.querySelector('.wakebar');
   if (!bar || !navigator.mediaDevices?.getUserMedia) return;
 
@@ -22,10 +22,38 @@
   let silenceFrames = 0;
   let speaking = false;
   let processing = false;
+  let suppressUntil = 0;
+  let lastAcceptedText = '';
+  let lastAcceptedAt = 0;
 
   const setState = (text, kind='neutral') => {
     pill.textContent = text;
     pill.className = `pill ${kind}`;
+  };
+
+  const normalizeText = (text='') => String(text)
+    .replace(/[\s，。！？,.!?、:：;；'"“”‘’()（）\[\]{}<>《》_-]+/g, '')
+    .toLowerCase();
+
+  const looksLikeJunk = (text='') => {
+    const raw = String(text).trim();
+    if (!raw) return true;
+    // Common hallucination produced when the recorder captures silence / AI playback.
+    if (/^(?:\s*\d{1,2}:\d{2}(?::\d{2})?\s*){2,}$/.test(raw)) return true;
+    const compact = normalizeText(raw);
+    if (!compact) return true;
+    // Reject transcripts that contain only digits/time separators and no real words.
+    if (/^[0-9:：.-]+$/.test(raw.replace(/\s+/g, ''))) return true;
+    return false;
+  };
+
+  const isDuplicate = (text='') => {
+    const normalized = normalizeText(text);
+    const now = Date.now();
+    if (normalized && normalized === lastAcceptedText && now - lastAcceptedAt < 6000) return true;
+    lastAcceptedText = normalized;
+    lastAcceptedAt = now;
+    return false;
   };
 
   const postAgent = async (action, extra={}) => {
@@ -97,12 +125,15 @@
 
   const transcribe = async (blob, mime) => {
     if (!blob || blob.size < 1200 || processing) return;
+    // Never transcribe audio captured while the AI answer is being played. This
+    // prevents speaker→microphone feedback loops and duplicate visual answers.
+    if (Date.now() < suppressUntil) return;
     processing = true;
     setState('正在识别语音…', 'warn');
     try {
       const fd = new FormData();
       const ext = mime.includes('mp4') ? 'm4a' : 'webm';
-      fd.append('file', blob, `shengwang-fallback.${ext}`);
+      fd.append('file', blob, `shengwang-voice.${ext}`);
       const provider = state?.provider || 'gemini';
       const r = await fetch(`/api/transcribe?provider=${encodeURIComponent(provider)}`, {method:'POST', body:fd});
       const raw = await r.text();
@@ -110,8 +141,14 @@
       try { data = JSON.parse(raw); } catch {}
       if (!r.ok) throw new Error(data.detail || raw || `HTTP ${r.status}`);
       const text = String(data.text || '').trim();
-      if (!text) {
-        setState('未识别到语音', 'warn');
+
+      if (looksLikeJunk(text)) {
+        setState('正在聆听', 'ok');
+        if (els.recordingState) els.recordingState.textContent = '🎙 正在聆听';
+        return;
+      }
+      if (isDuplicate(text)) {
+        setState('正在聆听', 'ok');
         return;
       }
 
@@ -120,9 +157,23 @@
 
       const answer = await analyzeCurrentFrame(text);
       if (answer) {
+        // Suspend local VAD for the estimated TTS duration. The browser ASR path
+        // intentionally behaves half-duplex; users can use “打断当前回答” first.
+        const answerChars = String(answer).replace(/\s+/g, '').length;
+        const holdMs = Math.max(3500, Math.min(20000, 1800 + answerChars * 170));
+        suppressUntil = Date.now() + holdMs;
+        speechFrames = 0;
+        silenceFrames = 0;
+        speaking = false;
         if (els.recordingState) els.recordingState.textContent = `✅ 已结合当前画面回答：${text}`;
-        setState('正在语音回答', 'ok');
+        setState('AI 正在回答', 'ok');
         await postAgent('speak', {text:answer});
+        setTimeout(() => {
+          if (Date.now() >= suppressUntil && running) {
+            setState('正在聆听', 'ok');
+            if (els.recordingState) els.recordingState.textContent = '🎙 正在聆听';
+          }
+        }, holdMs + 100);
       } else {
         addMessage('user', `🎙 ${text}`);
         setState('已识别 · 送入声网', 'ok');
@@ -131,7 +182,7 @@
         setState('正在等待回答', 'ok');
       }
     } catch (e) {
-      console.warn('Shengwang browser ASR fallback:', e);
+      console.warn('Shengwang browser ASR:', e);
       setState('语音处理失败', 'warn');
       if (els.recordingState) els.recordingState.textContent = `❌ 语音处理失败：${e.message}`;
     } finally {
@@ -145,7 +196,7 @@
   };
 
   const startRecording = () => {
-    if (!stream || recorder?.state === 'recording' || processing) return;
+    if (!stream || recorder?.state === 'recording' || processing || Date.now() < suppressUntil) return;
     const mime = ['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(t => MediaRecorder.isTypeSupported(t)) || '';
     chunks = [];
     recorder = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined);
@@ -161,6 +212,15 @@
 
   const tick = () => {
     if (!running || !analyser) return;
+    if (Date.now() < suppressUntil) {
+      speechFrames = 0;
+      silenceFrames = 0;
+      if (recorder?.state === 'recording') stopRecording();
+      speaking = false;
+      timer = setTimeout(tick, 100);
+      return;
+    }
+
     const data = new Float32Array(analyser.fftSize);
     analyser.getFloatTimeDomainData(data);
     let sum = 0;
@@ -217,12 +277,12 @@
       analyser = ctx.createAnalyser();
       analyser.fftSize = 1024;
       source.connect(analyser);
-      setState('语音输入已就绪', 'ok');
+      setState('正在聆听', 'ok');
       tick();
     } catch (e) {
       running = false;
       setState('无法打开麦克风', 'warn');
-      console.warn('browser ASR fallback init:', e);
+      console.warn('browser ASR init:', e);
     }
   };
 
@@ -233,6 +293,7 @@
     speaking = false;
     speechFrames = 0;
     silenceFrames = 0;
+    suppressUntil = 0;
     stopRecording();
     recorder = null;
     try { stream?.getTracks().forEach(t => t.stop()); } catch {}
