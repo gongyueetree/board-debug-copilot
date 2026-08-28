@@ -1,17 +1,23 @@
 .agora-mode-wrap{
-  display:flex;
+  display:grid;
+  grid-template-columns:minmax(130px,1fr) minmax(150px,1.15fr) minmax(118px,.85fr);
   align-items:center;
   gap:8px;
-  margin-left:auto;
-  flex-wrap:wrap;
+  width:100%;
+  min-width:0;
+  margin-left:0;
+  margin-top:8px;
 }
 .agora-mode-label{
+  grid-column:1 / -1;
   font-size:12px;
   color:#8fa7b8;
+  text-align:center;
 }
 .agora-mode-select{
-  min-width:138px;
-  height:32px;
+  width:100%;
+  min-width:0;
+  height:34px;
   border:1px solid #294252;
   border-radius:8px;
   background:#0f1820;
@@ -19,9 +25,35 @@
   padding:0 8px;
 }
 .agora-session-btn{
-  height:32px;
-  padding:0 12px;
+  width:100%;
+  min-width:0;
+  min-height:34px;
+  height:auto;
+  padding:6px 10px;
   border-radius:8px;
+  white-space:normal;
+  line-height:1.2;
+  overflow-wrap:anywhere;
+}
+.shengwang-diagnostics{
+  display:grid!important;
+  grid-template-columns:minmax(0,1fr) minmax(0,1fr) minmax(105px,.7fr);
+  gap:8px!important;
+  align-items:center!important;
+  width:100%;
+  min-width:0;
+  margin-top:8px!important;
+}
+.shengwang-diagnostics > *{
+  min-width:0;
+  max-width:100%;
+}
+.shengwang-diagnostics .pill{
+  justify-self:stretch;
+  text-align:center;
+  white-space:normal;
+  line-height:1.2;
+  padding:7px 8px;
 }
 .voicebtn.agora-live{
   border-color:rgba(53,226,165,.65)!important;
@@ -33,6 +65,39 @@
   color:#35e2a5;
 }
 .hidden{display:none!important;}
-@media (max-width: 900px){
-  .agora-mode-wrap{width:100%;margin-left:0;margin-top:8px;}
+
+/* The assistant column is narrow. Never let dynamically injected voice controls
+   expand the panel horizontally or get clipped on the right. */
+.wakebar{
+  flex-wrap:wrap;
+  align-items:center;
+  min-width:0;
+  overflow:visible;
+}
+.wakebar > *{
+  min-width:0;
+}
+
+@media (max-width: 1180px){
+  .agora-mode-wrap{
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  }
+  .agora-mode-label{grid-column:1 / -1;}
+  .agora-mode-wrap .pill{grid-column:1 / -1;justify-self:center;}
+  .shengwang-diagnostics{
+    grid-template-columns:minmax(0,1fr) minmax(0,1fr);
+  }
+  .shengwang-diagnostics .pill{grid-column:1 / -1;}
+}
+
+@media (max-width: 700px){
+  .agora-mode-wrap,
+  .shengwang-diagnostics{
+    grid-template-columns:1fr;
+  }
+  .agora-mode-label,
+  .agora-mode-wrap .pill,
+  .shengwang-diagnostics .pill{
+    grid-column:1;
+  }
 }
