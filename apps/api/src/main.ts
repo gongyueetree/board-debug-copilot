@@ -1,6 +1,7 @@
 import 'reflect-metadata'
 import { Logger } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
+import { json, urlencoded } from 'express'
 import { assertStorageUsable, describeStorage } from '@app/storage'
 import { AppModule } from './app.module'
 import { ZodExceptionFilter } from './common/zod-exception.filter'
@@ -26,7 +27,13 @@ function checkStorage() {
 
 async function bootstrap() {
   checkStorage()
-  const app = await NestFactory.create(AppModule)
+
+  // Camera captures are sent as JSON/base64 by the current web client. Nest/Express
+  // defaults to a ~100 KB JSON body, so 4K PCB screenshots otherwise fail with
+  // "request entity too large" before the controller is reached.
+  const app = await NestFactory.create(AppModule, { bodyParser: false })
+  app.use(json({ limit: '20mb' }))
+  app.use(urlencoded({ extended: true, limit: '20mb' }))
 
   const origins = (process.env.CORS_ORIGINS ?? 'http://localhost:3000')
     .split(',')
