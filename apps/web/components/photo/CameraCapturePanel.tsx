@@ -74,7 +74,6 @@ export function CameraCapturePanel({ projectId }: { projectId: string }) {
 
   const refreshDevices = async () => {
     try {
-      // Device labels are populated only after camera permission has been granted.
       const all = await navigator.mediaDevices.enumerateDevices()
       const cams = all.filter((d) => d.kind === 'videoinput')
       setDevices(cams)
@@ -88,7 +87,6 @@ export function CameraCapturePanel({ projectId }: { projectId: string }) {
   useEffect(() => {
     void refreshDevices()
     return stop
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const connectUvc = async () => {
