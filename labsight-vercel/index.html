@@ -17,7 +17,7 @@
 <header class="topbar">
   <div class="brand">
     <div class="brandmark">LS</div>
-    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.10 · 声网实时语音 · reCamera WebRTC · OpenAI + Gemini</div></div>
+    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.11 · 自动场景识别 · 声网实时语音 · reCamera WebRTC</div></div>
   </div>
   <div class="statusrow">
     <span id="apiStatus" class="pill neutral">AI 检查中…</span>
@@ -33,9 +33,9 @@
     <div class="panelhead">
       <div>
         <h2>实时视觉</h2>
-        <p>支持 Insta360 Link 系列 UVC 摄像头与 Seeed reCamera Pro Wi‑Fi 摄像头。reCamera 使用 RTSP→WebRTC 低延迟链路；后台服务仅需安装一次，之后随 macOS / Windows 登录自动运行。</p>
+        <p>连接摄像头后自动识别 PCB、示波器或其它测试仪器，并自动切换相应分析能力。支持 Insta360 Link 系列 UVC 与 Seeed reCamera Pro WebRTC。</p>
       </div>
-      <div class="scene-tabs" role="tablist">
+      <div class="scene-tabs" role="tablist" aria-hidden="true">
         <button class="scene active" data-scene="pcb">PCB</button>
         <button class="scene" data-scene="scope">示波器</button>
         <button class="scene" data-scene="instrument">仪器</button>
@@ -52,7 +52,7 @@
       </div>
       <div class="provider-meta">
         <strong id="providerMeta">检查中…</strong>
-        <span>普通分析用于快速观察；PCB Deep Vision 专门读取丝印、芯片顶标、接口与板级功能</span>
+        <span>系统会根据镜头看到的对象自动选择 PCB、信号或仪器分析方式</span>
       </div>
     </div>
 
@@ -66,11 +66,11 @@
     <div class="viewer">
       <video id="video" autoplay playsinline muted></video>
       <canvas id="captureCanvas"></canvas>
-      <div class="focus-guide"><span>Deep Vision ROI · 把整块 PCB 放在框内</span></div>
+      <div class="focus-guide"><span>等待自动识别当前场景…</span></div>
       <div class="viewer-badge" id="viewerBadge">LIVE</div>
       <div class="viewer-empty" id="viewerEmpty">
         <div class="camera-icon">◉</div><strong>连接摄像头</strong>
-        <span>USB/UVC 可直接连接；reCamera Pro 通过 Wi‑Fi + WebRTC 接入</span>
+        <span>连接后自动判断 PCB / 示波器 / 测试仪器</span>
       </div>
     </div>
 
@@ -111,12 +111,7 @@
     </div>
 
     <div id="chat" class="chat">
-      <div class="message assistant"><div class="bubble">PCB 模式现在有两种分析：
-
-普通分析：快速回答当前问题。
-PCB Deep Vision：使用整板图 + 6 个高清局部 Tile，优先读取丝印、IC 顶标、接口标签、频率标记并输出器件/接口清单。
-
-EVT0.10：实时语音切换为声网国内对话式 AI 引擎，启用语义判停与插话打断。</div></div>
+      <div class="message assistant"><div class="bubble">连接摄像头后，LabSight 会自动判断当前面对的是 PCB、示波器还是其它测试仪器，并自动显示对应的分析按钮。</div></div>
     </div>
 
     <div class="quickprompts">
@@ -137,7 +132,7 @@ EVT0.10：实时语音切换为声网国内对话式 AI 引擎，启用语义判
 </section>
 </main>
 
-<footer>LabSight EVT0.10 · 声网实时语音 · reCamera WebRTC · OpenAI + Gemini</footer>
+<footer>LabSight EVT0.11 · 自动场景识别 · 声网实时语音 · reCamera WebRTC · OpenAI + Gemini</footer>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.24.7/AgoraRTC_N-production.js"></script>
 <script src="/app.js?v=0.5.6"></script>
@@ -146,7 +141,8 @@ EVT0.10：实时语音切换为声网国内对话式 AI 引擎，启用语义判
 <script src="/speech-utils.js?v=0.1.0"></script>
 <script src="/voice-upgrade.js?v=0.5.6"></script>
 <script src="/realtime-voice.js?v=0.6.2"></script>
-<script src="/camera-adapters.js?v=0.9.0"></script>
+<script src="/camera-adapters.js?v=0.10.0"></script>
+<script src="/auto-scene.js?v=0.1.0"></script>
 <script src="/shengwang-voice-adapter.js?v=0.10.0"></script>
 <script src="/assembly-inspection.js?v=0.8.3"></script>
 </body>
