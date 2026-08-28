@@ -9,7 +9,7 @@ import requests
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="LabSight PCB Deep Vision", version="0.5.2")
+app = FastAPI(title="LabSight PCB Deep Vision", version="0.5.3")
 
 MAX_TOTAL_IMAGE_CHARS = 3_600_000
 MAX_CONTEXT_CHARS = 24_000
@@ -52,7 +52,16 @@ DEEP_PROMPT = """
 2. 只有器件型号、芯片顶标、丝印原文、引脚名、网络名、协议缩写和单位（如 RP2040、SWD、GPIO、3V3、12MHz）保留原始英文/数字；不要把完整句子写成英文。
 3. 不允许中英文两套描述并列，不要出现英文完整句子。
 
-识别优先级：
+器件识别方法（核心要求）：
+1. 对每个主要 IC，第一步先逐字读取封装顶部可见印字/顶标，marking 必须保存真实看到的字符，不要把推断型号写进 marking。
+2. 第二步根据 marking + 封装形态/引脚数 + 周围器件/走线 + PCB 丝印位号 + KiCad 中的 reference/value/net，推断最可能的完整器件型号，写入 likely_part。
+3. 第三步说明该器件最可能承担的功能，写入 role；不要只说“MCU/电源芯片”这种泛化类别，能判断时写到“USB MCU/3.3V LDO/四路电平转换器/运算放大器”等工程级功能。
+4. 如果一个顶标可能对应多个型号，candidates 按可能性从高到低列出 2~4 个候选；likely_part 只填最可能的一个；confidence 反映综合证据强度。
+5. observed 只写“实际看到的证据”，例如“顶标 W6X09 C310”“TSSOP-8”“紧邻 12MHz 晶振”；inferred 写“由这些证据推断出的工程判断”，不要混淆观察与推断。
+6. 不允许仅凭模糊印字强行给出唯一型号；字符不清楚时应给候选并降低 confidence。
+7. 若 KiCad 已明确给出该 reference 对应的型号，应优先用视觉顶标去核对 KiCad，而不是无视工程文件重新猜。
+
+其它识别优先级：
 1. 逐字读取板名、丝印、接口/引脚标签、频率、测试点、芯片顶标。
 2. 主要 IC、晶振、运放、电源器件尽量给出顶标、候选型号、作用和置信度。
 3. 字符部分可见时给候选值，不要因非 100% 确定而省略；observed 与 inferred 分开。
