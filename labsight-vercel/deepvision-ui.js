@@ -1,5 +1,5 @@
 (() => {
-  const esc = (v='') => String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]));
+  const esc = (v='') => String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const pct = v => Number.isFinite(Number(v)) ? `${Math.round(Number(v) * 100)}%` : '';
   const chip = (text, cls='') => `<span class="dv-chip ${cls}">${esc(text)}</span>`;
   const kindZh = {
@@ -160,8 +160,6 @@
       if(state.conversation.length>20) state.conversation=state.conversation.slice(-20);
       els.deepVisionState.textContent=`完成 · ${d.model} · ${d.source?.images||7} 张图 · 原始 ${d.source?.width||'?'}×${d.source?.height||'?'}`;
       extendSession();
-      // Do not keep the analysis controls disabled while TTS is playing/falling back.
-      // Voice can fail or wait on a remote realtime session; Deep Vision must remain independently clickable.
       els.deepVisionBtn.disabled=false;
       els.deepVisionBtn.dataset.running='0';
       els.analyzeBtn.disabled=els.sendBtn.disabled=false;
