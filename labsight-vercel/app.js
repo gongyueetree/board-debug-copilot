@@ -46,6 +46,24 @@ function updateProviderUI() {
   setPill(els.apiStatus, `${label} · ${p.configured ? model : 'Demo'}`, p.configured ? 'ok' : 'warn');
 }
 
+function updateSceneUI() {
+  const isPcb = state.scene === 'pcb';
+  const isScope = state.scene === 'scope';
+  if (els.deepVisionBtn) els.deepVisionBtn.style.display = isPcb ? '' : 'none';
+  if (els.deepVisionState && !isPcb) els.deepVisionState.classList.add('hidden');
+  if (els.analyzeBtn) {
+    els.analyzeBtn.textContent = isScope ? '✦ 分析当前信号' : state.scene === 'instrument' ? '✦ 分析当前仪器' : '✦ 分析当前画面';
+  }
+  const guide = document.querySelector('.focus-guide span');
+  if (guide) {
+    guide.textContent = isScope
+      ? 'Signal ROI · 把示波器波形与刻度完整放在框内'
+      : state.scene === 'instrument'
+        ? 'Instrument ROI · 把仪器屏幕与关键读数放在框内'
+        : 'Deep Vision ROI · 把整块 PCB 放在框内';
+  }
+}
+
 async function readJsonResponse(r) {
   const text = await r.text();
   let data;
@@ -125,7 +143,6 @@ function captureFrame() {
 
 function buildDeepVisionPack(){
   const native=getNativeFrameCanvas(); if(!native){alert('请先连接摄像头。');return null;}
-  // 与页面绿色 focus-guide 一致：left/right 13%，top/bottom 14%。
   const rx=.13*native.width, ry=.14*native.height, rw=.74*native.width, rh=.72*native.height;
   const board=cropCanvas(native,rx,ry,rw,rh);
   const overview=canvasScaledDataURL(board,1800,.84);
@@ -165,7 +182,7 @@ function deepResultText(d){
 
 async function deepVisionAnalyze(){
   if(state.scene!=='pcb'){
-    document.querySelectorAll('.scene').forEach(x=>x.classList.toggle('active',x.dataset.scene==='pcb'));state.scene='pcb';
+    document.querySelectorAll('.scene').forEach(x=>x.classList.toggle('active',x.dataset.scene==='pcb'));state.scene='pcb';updateSceneUI();
   }
   const pack=buildDeepVisionPack();if(!pack)return;
   const q=(els.question.value||'').trim()||'深度识别这块 PCB：优先读取板名、所有可见丝印、主要 IC 顶标/型号候选、接口引脚、时钟/频率标记，并分析核心器件和整板功能。';
@@ -185,40 +202,34 @@ async function deepVisionAnalyze(){
 }
 
 async function askAI(questionOverride=null) {
-  const q=(questionOverride??els.question.value).trim()||'请分析当前画面并告诉我下一步应该做什么。';
+  const defaults = {
+    pcb: '请分析当前画面并告诉我下一步应该做什么。',
+    scope: '请分析当前示波器信号，直接读取并判断波形的频率、周期、Vpp、偏置、占空比、时基、垂直档位以及明显异常。',
+    instrument: '请分析当前仪器画面，直接读取关键参数、状态和异常。'
+  };
+  const q=(questionOverride??els.question.value).trim()||defaults[state.scene]||defaults.pcb;
   const image=captureFrame(); if(!image)return; addMessage('user',q);els.question.value='';
-  const thinking=addMessage('assistant',`正在用 ${state.provider==='gemini'?'Gemini':'OpenAI'} 读取当前画面…`,'thinking');els.sendBtn.disabled=els.analyzeBtn.disabled=true;
+  const thinkingText = state.scene==='scope' ? '正在读取当前示波器信号…' : state.scene==='instrument' ? '正在读取当前仪器画面…' : '正在读取当前画面…';
+  const thinking=addMessage('assistant',`正在用 ${state.provider==='gemini'?'Gemini':'OpenAI'} ${thinkingText.replace('正在','')}`,'thinking');els.sendBtn.disabled=els.analyzeBtn.disabled=true;
   try{
     const payload={question:q,scene:state.scene,provider:state.provider,image_data_url:image,project_context:state.projectContext,conversation:state.conversation.slice(-8)};
     const r=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await readJsonResponse(r);
     thinking.remove();addMessage('assistant',`[${d.provider.toUpperCase()} · ${d.model}]\n${d.answer}`);state.conversation.push({role:'user',content:q},{role:'assistant',content:d.answer});
     if(state.conversation.length>20)state.conversation=state.conversation.slice(-20);extendSession();if(els.autoSpeak.checked)await speakAnswer(d.answer);
-  }catch(e){thinking.remove();addMessage('assistant',`分析失败：${e.message}`);} finally{els.sendBtn.disabled=els.analyzeBtn.disabled=false;}
+  }catch(e){thinking.remove();addMessage('assistant',`分析失败：${e.message}`);}
+  finally{els.sendBtn.disabled=els.analyzeBtn.disabled=false;}
 }
 
-function plainForSpeech(text){return text.replace(/[*#>`_\-]/g,' ').replace(/\s+/g,' ').trim().slice(0,2600);}
 async function speakAnswer(text){
-  const clean=plainForSpeech(text);if(!clean)return;state.listeningSuspended=true;stopWakeListening();
-  try{
-    if(els.cloudTts.checked && state.health?.providers?.openai?.configured){
-      const r=await fetch('/api/speech',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text:clean})});if(!r.ok)throw new Error((await r.json()).detail||'TTS 失败');
-      const blob=await r.blob(),url=URL.createObjectURL(blob);if(state.speakingAudio)state.speakingAudio.pause();const audio=new Audio(url);state.speakingAudio=audio;
-      await new Promise((resolve,reject)=>{audio.onended=resolve;audio.onerror=reject;audio.play().catch(reject);});URL.revokeObjectURL(url);
-    }else if('speechSynthesis'in window){await new Promise(resolve=>{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(clean);u.lang='zh-CN';u.rate=1.02;u.onend=resolve;u.onerror=resolve;speechSynthesis.speak(u);});}
-  }catch(e){console.warn(e);}finally{setTimeout(()=>{state.listeningSuspended=false;if(els.wakeToggle.checked)startWakeListening();},650);}
+  if(!text)return;try{if(state.speakingAudio){state.speakingAudio.pause();state.speakingAudio=null;}const r=await fetch('/api/speech',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:state.provider,text})});if(!r.ok)throw new Error(`HTTP ${r.status}`);const blob=await r.blob(),url=URL.createObjectURL(blob),a=new Audio(url);state.speakingAudio=a;await a.play();a.onended=()=>{URL.revokeObjectURL(url);state.speakingAudio=null;};}catch(e){console.warn('tts:',e);}
 }
 
-function escapeHtml(s){return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
-function takeMatches(regex,text,set){let m;regex.lastIndex=0;while((m=regex.exec(text))!==null){if(m[1])set.add(m[1]);if(set.size>1200)break;}}
+function escapeHtml(s=''){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+function takeMatches(re,text,set){let m;while((m=re.exec(text)))if(m[1])set.add(m[1]);}
 async function parseKiCadZip(file){
-  if(!window.JSZip)throw new Error('JSZip 加载失败');
-  const zip=await JSZip.loadAsync(file),result={filename:file.name,files:[],schematics:[],pcbs:[],project_files:[],references:[],values:[],nets:[],raw_context:''};
-  const refs=new Set(),vals=new Set(),nets=new Set();let raw='';
-  for(const entry of Object.values(zip.files).filter(e=>!e.dir)){
-    const name=entry.name.replace(/\\/g,'/');result.files.push(name);const lower=name.toLowerCase();
-    if(lower.endsWith('.kicad_sch'))result.schematics.push(name);else if(lower.endsWith('.kicad_pcb'))result.pcbs.push(name);else if(lower.endsWith('.kicad_pro')||lower.endsWith('.pro'))result.project_files.push(name);
-    if(!/\.(kicad_sch|kicad_pcb|kicad_pro|net|csv|bom)$/i.test(lower))continue;
-    const text=await entry.async('string');takeMatches(/\(property\s+"Reference"\s+"([^"\n]+)"/g,text,refs);takeMatches(/\(property\s+"Value"\s+"([^"\n]+)"/g,text,vals);takeMatches(/\(fp_text\s+reference\s+"?([^"\s\)]+)/g,text,refs);takeMatches(/\(net\s+\d+\s+"([^"\n]+)"\)/g,text,nets);
+  if(!window.JSZip)throw new Error('JSZip 未加载');const zip=await JSZip.loadAsync(file),names=Object.keys(zip.files).filter(n=>!zip.files[n].dir),refs=new Set(),vals=new Set(),nets=new Set();let raw='';const result={filename:file.name,files:names.slice(0,500),schematics:names.filter(n=>n.endsWith('.kicad_sch')),pcbs:names.filter(n=>n.endsWith('.kicad_pcb')),references:[],values:[],nets:[],raw_context:''};
+  for(const name of names){const lower=name.toLowerCase();if(!/\.(kicad_sch|kicad_pcb|kicad_pro|net|csv|bom)$/i.test(lower))continue;
+    const text=await zip.files[name].async('string');takeMatches(/\(property\s+"Reference"\s+"([^"\n]+)"/g,text,refs);takeMatches(/\(property\s+"Value"\s+"([^"\n]+)"/g,text,vals);takeMatches(/\(fp_text\s+reference\s+"?([^"\s\)]+)/g,text,refs);takeMatches(/\(net\s+\d+\s+"([^"\n]+)"\)/g,text,nets);
     if(raw.length<45000)raw+=`\n--- ${name} ---\n${text.slice(0,12000)}`;
   }
   result.references=[...refs].sort().slice(0,800);result.values=[...vals].sort().slice(0,800);result.nets=[...nets].sort().slice(0,800);result.raw_context=raw.slice(0,45000);return result;
@@ -254,10 +265,10 @@ async function startWakeListening(){
 }
 
 els.providerSelect.addEventListener('change',()=>{state.provider=els.providerSelect.value;updateProviderUI();stopWakeListening();if(els.wakeToggle.checked)setTimeout(startWakeListening,250);});
-[...document.querySelectorAll('.scene')].forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.scene').forEach(x=>x.classList.remove('active'));btn.classList.add('active');state.scene=btn.dataset.scene;}));
+[...document.querySelectorAll('.scene')].forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.scene').forEach(x=>x.classList.remove('active'));btn.classList.add('active');state.scene=btn.dataset.scene;updateSceneUI();}));
 els.refreshDevices.addEventListener('click',()=>enumerateDevices(true));els.startCamera.addEventListener('click',startCamera);els.captureBtn.addEventListener('click',captureFrame);els.analyzeBtn.addEventListener('click',()=>askAI());els.deepVisionBtn?.addEventListener('click',deepVisionAnalyze);els.sendBtn.addEventListener('click',()=>askAI());
 els.voiceBtn.addEventListener('click',toggleVoice);els.projectFile.addEventListener('change',e=>uploadProject(e.target.files[0]));els.clearChat.addEventListener('click',()=>{state.conversation=[];els.chat.innerHTML='';addMessage('assistant','对话已清空。');});
 els.question.addEventListener('keydown',e=>{if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){e.preventDefault();askAI();}});document.querySelectorAll('.quickprompts button').forEach(b=>b.addEventListener('click',()=>askAI(b.dataset.prompt)));
 els.wakeToggle.addEventListener('change',()=>{if(els.wakeToggle.checked)startWakeListening();else{stopWakeListening();setPill(els.wakeState,'自动唤醒 OFF','neutral');}});
 ['dragenter','dragover'].forEach(n=>els.dropzone.addEventListener(n,e=>{e.preventDefault();els.dropzone.classList.add('drag');}));['dragleave','drop'].forEach(n=>els.dropzone.addEventListener(n,e=>{e.preventDefault();els.dropzone.classList.remove('drag');}));els.dropzone.addEventListener('drop',e=>{const f=e.dataTransfer.files[0];if(f)uploadProject(f);});
-navigator.mediaDevices?.addEventListener?.('devicechange',()=>enumerateDevices(false));checkHealth();enumerateDevices(false);
+navigator.mediaDevices?.addEventListener?.('devicechange',()=>enumerateDevices(false));updateSceneUI();checkHealth();enumerateDevices(false);
