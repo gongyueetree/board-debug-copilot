@@ -10,11 +10,13 @@
   host.style.alignItems = 'center';
   host.style.marginTop = '8px';
   host.innerHTML = `
-    <button id="geminiTtsTestBtn" class="secondary agora-session-btn" type="button">测试 Gemini TTS</button>
+    <button id="genericTtsChainBtn" class="secondary agora-session-btn" type="button">诊断 声网→Probe→Gemini</button>
+    <button id="geminiTtsTestBtn" class="secondary agora-session-btn" type="button">浏览器直测 Gemini TTS</button>
     <span id="geminiTtsTestState" class="pill neutral">TTS 未测试</span>
   `;
   bar.appendChild(host);
 
+  const chainBtn = document.getElementById('genericTtsChainBtn');
   const btn = document.getElementById('geminiTtsTestBtn');
   const pill = document.getElementById('geminiTtsTestState');
 
@@ -129,7 +131,7 @@
       setState(`PCM ${Math.round(pcm.byteLength/1024)}KB · ${elapsedMs}ms`, 'ok');
       const recording = document.getElementById('recordingState');
       if (recording) {
-        recording.textContent = `✅ Gemini TTS 正常：HTTP ${response.status} · ${contentType} · ${Math.round(pcm.byteLength/1024)}KB · ${sampleRate}Hz · ${elapsedMs}ms`;
+        recording.textContent = `✅ 浏览器直连 Gemini TTS 正常：HTTP ${response.status} · ${contentType} · ${Math.round(pcm.byteLength/1024)}KB · ${sampleRate}Hz · ${elapsedMs}ms`;
         recording.title = '';
       }
       await playPcm(pcm, sampleRate);
@@ -143,6 +145,29 @@
     }
   };
 
+  const diagnoseChain = async () => {
+    chainBtn.disabled = true;
+    btn.disabled = true;
+    setState('链路诊断中…', 'warn');
+    const recording = document.getElementById('recordingState');
+    if (recording) recording.textContent = '准备执行两阶段诊断：① 声网 GenericTTS → 固定 PCM Probe；② 在 Probe 成功后切到 Gemini。';
+    try {
+      const voice = window.LabSightShengwangVoice;
+      if (!voice?.diagnoseGenericTts) throw new Error('声网语音 Adapter 尚未加载最新诊断能力');
+      const result = await voice.diagnoseGenericTts();
+      if (result?.probe && result?.gemini) setState('全链路正常', 'ok');
+      else if (result?.probe) setState('Probe 正常 · Gemini 失败', 'warn');
+      else setState('Probe 阶段失败', 'warn');
+    } catch (e) {
+      setState('诊断失败', 'warn');
+      showDiagnosticMessage({title:'声网 GenericTTS 链路诊断失败', summary:e.message, detail:''});
+    } finally {
+      chainBtn.disabled = false;
+      btn.disabled = false;
+    }
+  };
+
+  chainBtn.addEventListener('click', diagnoseChain);
   btn.addEventListener('click', testGeminiTts);
-  window.LabSightShengwangDiagnostics = {testGeminiTts};
+  window.LabSightShengwangDiagnostics = {testGeminiTts, diagnoseChain};
 })();
