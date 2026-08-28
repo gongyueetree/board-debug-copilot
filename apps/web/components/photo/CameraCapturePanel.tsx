@@ -8,7 +8,7 @@ type Source = 'uvc' | 'recamera'
 
 type StatusKind = 'idle' | 'ok' | 'warn'
 
-const RECAMERA_BRIDGE = 'http://127.0.0.1:8765'
+const DEFAULT_RECAMERA_BRIDGE_PORT = '18765'
 
 function waitForIce(pc: RTCPeerConnection, timeoutMs = 2500) {
   if (pc.iceGatheringState === 'complete') return Promise.resolve()
@@ -50,6 +50,8 @@ export function CameraCapturePanel({ projectId }: { projectId: string }) {
   const [cameraIp, setCameraIp] = useState('192.168.42.1')
   const [cameraUser, setCameraUser] = useState('admin')
   const [cameraPassword, setCameraPassword] = useState('')
+  const [cameraRtspPath, setCameraRtspPath] = useState('/main')
+  const [cameraBridgePort, setCameraBridgePort] = useState(DEFAULT_RECAMERA_BRIDGE_PORT)
   const [connected, setConnected] = useState(false)
   const [busy, setBusy] = useState(false)
   const [status, setStatus] = useState('摄像头未连接')
@@ -127,7 +129,13 @@ export function CameraCapturePanel({ projectId }: { projectId: string }) {
     setStatus('正在连接 reCamera Pro WebRTC…')
     setStatusKind('idle')
 
-    const health = await fetch(`${RECAMERA_BRIDGE}/health`, { cache: 'no-store' })
+    const bridgePort = Number(cameraBridgePort.trim() || DEFAULT_RECAMERA_BRIDGE_PORT)
+    if (!Number.isInteger(bridgePort) || bridgePort < 1 || bridgePort > 65535) {
+      throw new Error('Bridge 端口必须是 1–65535 的整数')
+    }
+    setCameraBridgePort(String(bridgePort))
+    const bridgeOrigin = `http://127.0.0.1:${bridgePort}`
+    const health = await fetch(`${bridgeOrigin}/health`, { cache: 'no-store' })
     if (!health.ok) throw new Error('LabSight reCamera WebRTC 后台服务未就绪')
 
     const pc = new RTCPeerConnection()
@@ -159,7 +167,11 @@ export function CameraCapturePanel({ projectId }: { projectId: string }) {
     await pc.setLocalDescription(offer)
     await waitForIce(pc)
 
-    const r = await fetch(`${RECAMERA_BRIDGE}/offer`, {
+    const trimmedRtspPath = cameraRtspPath.trim() || '/main'
+    const rtspPath = trimmedRtspPath.startsWith('/') ? trimmedRtspPath : `/${trimmedRtspPath}`
+    setCameraRtspPath(rtspPath)
+
+    const r = await fetch(`${bridgeOrigin}/offer`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -168,7 +180,7 @@ export function CameraCapturePanel({ projectId }: { projectId: string }) {
         camera_ip: cameraIp.trim(),
         username: cameraUser.trim() || 'admin',
         password: cameraPassword,
-        rtsp_path: '/live',
+        rtsp_path: rtspPath,
       }),
     })
     const data = await r.json().catch(() => ({}))
@@ -309,8 +321,16 @@ export function CameraCapturePanel({ projectId }: { projectId: string }) {
                 <span className="mb-1 block font-medium text-slate-600">密码</span>
                 <input type="password" value={cameraPassword} onChange={(e) => setCameraPassword(e.target.value)} className="w-full rounded-lg border border-slate-200 px-2.5 py-2" />
               </label>
+              <label className="col-span-2">
+                <span className="mb-1 block font-medium text-slate-600">RTSP 路径</span>
+                <input value={cameraRtspPath} onChange={(e) => setCameraRtspPath(e.target.value)} placeholder="/main" className="w-full rounded-lg border border-slate-200 px-2.5 py-2" />
+              </label>
+              <label className="col-span-2">
+                <span className="mb-1 block font-medium text-slate-600">Bridge 端口</span>
+                <input type="number" min={1} max={65535} value={cameraBridgePort} onChange={(e) => setCameraBridgePort(e.target.value)} placeholder={DEFAULT_RECAMERA_BRIDGE_PORT} className="w-full rounded-lg border border-slate-200 px-2.5 py-2" />
+              </label>
               <p className="col-span-2 text-[10px] leading-4 text-slate-400">
-                使用本机 LabSight WebRTC Bridge（127.0.0.1:8765），安装一次后随 macOS / Windows 登录自动运行。
+                使用本机 LabSight WebRTC Bridge（127.0.0.1，端口可配置），安装一次后随 macOS / Windows 登录自动运行。
               </p>
             </div>
           )}

@@ -4,24 +4,40 @@
   // reCamera Pro: RTSP is converted to WebRTC by the auto-start local service;
   // the browser receives a real MediaStreamTrack (no JPEG polling / canvas bridge).
 
-  const BRIDGE = 'http://127.0.0.1:8765';
+  const DEFAULT_BRIDGE_PORT = 18765;
   let remotePc = null;
   let remoteMicStream = null;
 
   const style = document.createElement('style');
   style.textContent = `
-    .camera-source-select{min-width:170px}
-    .camera-adapter-panel{display:none;grid-template-columns:1.2fr 1fr 1fr;gap:8px;margin-top:10px;padding:10px;border:1px solid rgba(86,220,190,.20);border-radius:10px;background:rgba(8,20,27,.50)}
+    .camera-toolbar{grid-template-columns:repeat(12,minmax(0,1fr));align-items:stretch}
+    .camera-toolbar>*{min-width:0;width:100%}
+    .camera-toolbar select{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .camera-toolbar button{white-space:nowrap}
+    .camera-source-select,#cameraSelect,#micSelect,#audioOutputSelect{grid-column:span 3}
+    #refreshDevices,#disconnectCamera{grid-column:span 2}
+    #startCamera{grid-column:span 3}
+    .camera-source-select{min-width:0}
+    .camera-adapter-panel{display:none;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:10px 20px 0;padding:12px;border:1px solid rgba(86,220,190,.20);border-radius:10px;background:rgba(8,20,27,.50);max-width:calc(100% - 40px);overflow:hidden}
     .camera-adapter-panel.show{display:grid}
-    .camera-adapter-panel label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:#8ea6b5}
-    .camera-adapter-panel input{min-width:0;padding:8px 9px;border-radius:8px;border:1px solid rgba(126,160,177,.26);background:#09131b;color:#dbe8ef}
+    .camera-adapter-panel label{display:flex;min-width:0;flex-direction:column;gap:5px;font-size:11px;color:#8ea6b5}
+    .camera-adapter-panel input{width:100%;min-width:0;padding:8px 9px;border-radius:8px;border:1px solid rgba(126,160,177,.26);background:#09131b;color:#dbe8ef}
     .camera-adapter-help{grid-column:1/-1;font-size:11px;color:#829aa9;line-height:1.45;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
     .camera-focus-pill{white-space:nowrap}
     .bridge-state{font-weight:650}
     .bridge-state.ok{color:#57e3b2}.bridge-state.warn{color:#ffbf69}
     .camera-disconnect{display:none;border-color:rgba(255,106,106,.38)!important;color:#ff9a9a!important}
     .camera-disconnect.show{display:inline-flex}
-    @media(max-width:900px){.camera-adapter-panel{grid-template-columns:1fr}}
+    @media(max-width:1250px){
+      .camera-toolbar{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .camera-toolbar>*{grid-column:span 1!important}
+    }
+    @media(max-width:900px){
+      .camera-adapter-panel{grid-template-columns:repeat(2,minmax(0,1fr))}
+    }
+    @media(max-width:560px){
+      .camera-toolbar,.camera-adapter-panel{grid-template-columns:minmax(0,1fr)}
+    }
   `;
   document.head.appendChild(style);
 
@@ -49,6 +65,8 @@
     <label>reCamera Pro IP<input id="recameraIp" value="${localStorage.getItem('labsight-recamera-ip') || '192.168.42.1'}" placeholder="192.168.1.100"></label>
     <label>用户名<input id="recameraUser" value="${localStorage.getItem('labsight-recamera-user') || 'admin'}" autocomplete="username"></label>
     <label>密码<input id="recameraPassword" type="password" value="" autocomplete="current-password" placeholder="设备登录密码"></label>
+    <label>RTSP 路径<input id="recameraRtspPath" value="${localStorage.getItem('labsight-recamera-rtsp-path') || '/main'}" placeholder="/main"></label>
+    <label>Bridge 端口<input id="recameraBridgePort" type="number" min="1" max="65535" value="${localStorage.getItem('labsight-recamera-bridge-port') || DEFAULT_BRIDGE_PORT}" placeholder="${DEFAULT_BRIDGE_PORT}"></label>
     <div class="camera-adapter-help"><span id="recameraBridgeState" class="bridge-state">正在检测 WebRTC 服务…</span><span>视频链路：reCamera RTSP/H.264 → 本机后台 WebRTC → LabSight Browser。后台服务安装一次后会随系统登录自动启动。</span></div>`;
   toolbar.insertAdjacentElement('afterend', panel);
 
@@ -60,6 +78,8 @@
   const ipEl = panel.querySelector('#recameraIp');
   const userEl = panel.querySelector('#recameraUser');
   const passEl = panel.querySelector('#recameraPassword');
+  const rtspPathEl = panel.querySelector('#recameraRtspPath');
+  const bridgePortEl = panel.querySelector('#recameraBridgePort');
   const bridgeStateEl = panel.querySelector('#recameraBridgeState');
 
   const setFocusPill = (text, kind='neutral') => {
@@ -98,16 +118,26 @@
     window.LabSightAutoScene?.reset?.();
   }
 
-  async function checkBridge() {
+  function bridgeOrigin() {
+    const rawPort = bridgePortEl.value.trim() || String(DEFAULT_BRIDGE_PORT);
+    const port = Number(rawPort);
+    if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Bridge 端口必须是 1–65535 的整数');
+    bridgePortEl.value = String(port);
+    localStorage.setItem('labsight-recamera-bridge-port', String(port));
+    return `http://127.0.0.1:${port}`;
+  }
+
+  async function checkBridge(origin) {
     try {
-      const r = await fetch(`${BRIDGE}/health?t=${Date.now()}`, {cache:'no-store'});
+      const bridge = origin || bridgeOrigin();
+      const r = await fetch(`${bridge}/health?t=${Date.now()}`, {cache:'no-store'});
       const d = await r.json();
       if (!r.ok || !d.ok) throw new Error('health failed');
       bridgeStateEl.textContent = 'WebRTC 后台服务已就绪';
       bridgeStateEl.className = 'bridge-state ok';
       return true;
-    } catch {
-      bridgeStateEl.textContent = 'WebRTC 后台服务未运行：请先执行一次安装器';
+    } catch (error) {
+      bridgeStateEl.textContent = error.message?.startsWith('Bridge 端口') ? error.message : 'WebRTC 后台服务未运行：请检查 Bridge 端口和服务状态';
       bridgeStateEl.className = 'bridge-state warn';
       return false;
     }
@@ -179,12 +209,18 @@
     const ip = ipEl.value.trim();
     const username = userEl.value.trim() || 'admin';
     const password = passEl.value;
+    const rawRtspPath = rtspPathEl.value.trim() || '/main';
+    const rtspPath = rawRtspPath.startsWith('/') ? rawRtspPath : `/${rawRtspPath}`;
     if (!ip) { alert('请输入 reCamera Pro IP 地址'); return; }
+    let bridge;
+    try { bridge = bridgeOrigin(); } catch (error) { alert(error.message); return; }
+    rtspPathEl.value = rtspPath;
     localStorage.setItem('labsight-recamera-ip', ip);
     localStorage.setItem('labsight-recamera-user', username);
+    localStorage.setItem('labsight-recamera-rtsp-path', rtspPath);
 
     try {
-      if (!(await checkBridge())) throw new Error('本机 WebRTC 后台服务未运行。请先运行一次 Mac/Windows 安装器，之后无需再次启动。');
+      if (!(await checkBridge(bridge))) throw new Error('本机 WebRTC 后台服务未运行。请检查 Bridge 端口和服务状态。');
 
       let audioTracks = [];
       try {
@@ -214,9 +250,9 @@
       await pc.setLocalDescription(offer);
       await waitIceGatheringComplete(pc);
 
-      const r = await fetch(`${BRIDGE}/offer`, {
+      const r = await fetch(`${bridge}/offer`, {
         method:'POST', cache:'no-store', headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({sdp:pc.localDescription.sdp,type:pc.localDescription.type,camera_ip:ip,username,password,rtsp_path:'/live'})
+        body:JSON.stringify({sdp:pc.localDescription.sdp,type:pc.localDescription.type,camera_ip:ip,username,password,rtsp_path:rtspPath})
       });
       const text = await r.text();
       let answer={}; try { answer=JSON.parse(text); } catch {}
@@ -225,7 +261,7 @@
 
       const deadline = Date.now()+8000;
       while (!gotVideo && Date.now()<deadline) await new Promise(r=>setTimeout(r,100));
-      if (!gotVideo) throw new Error('WebRTC 已协商，但没有收到 reCamera 视频轨道；请确认 Node-RED 中 RTSP /live 已启用。');
+      if (!gotVideo) throw new Error(`WebRTC 已协商，但没有收到 reCamera 视频轨道；请确认 RTSP ${rtspPath} 已启用。`);
 
       setPill(els.cameraStatus, 'reCamera Pro · Wi‑Fi · WebRTC', 'ok');
       setPill(els.micStatus, audioTracks.length ? `Mic · ${audioTracks[0].label || '本机麦克风'}` : 'Mic · 未连接', audioTracks.length?'ok':'warn');

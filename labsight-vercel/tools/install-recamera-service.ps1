@@ -29,7 +29,7 @@ Write-Host '[LabSight] 安装/更新 reCamera WebRTC 依赖…'
 & $Python -m pip install --upgrade pip
 & $Pip install -r $Req
 
-$Action = New-ScheduledTaskAction -Execute $Python -Argument "`"$Bridge`" --host 127.0.0.1 --port 8765"
+$Action = New-ScheduledTaskAction -Execute $Python -Argument "`"$Bridge`" --host 127.0.0.1 --port 18765"
 $Trigger = New-ScheduledTaskTrigger -AtLogOn
 $Settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1)
 $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
@@ -41,7 +41,7 @@ Start-ScheduledTask -TaskName $TaskName
 $ok = $false
 for ($i=0; $i -lt 30; $i++) {
   try {
-    $r = Invoke-RestMethod -Uri 'http://127.0.0.1:8765/health' -TimeoutSec 1
+    $r = Invoke-RestMethod -Uri 'http://127.0.0.1:18765/health' -TimeoutSec 1
     if ($r.ok) { $ok = $true; break }
   } catch {}
   Start-Sleep -Milliseconds 400
@@ -51,7 +51,7 @@ if ($ok) {
   Write-Host ''
   Write-Host '✅ LabSight reCamera WebRTC 后台服务已安装并启动。' -ForegroundColor Green
   Write-Host '以后登录 Windows 会自动运行，不需要再手工启动 Python。'
-  Write-Host '健康检查：http://127.0.0.1:8765/health'
+  Write-Host '健康检查：http://127.0.0.1:18765/health'
 } else {
   Write-Host ''
   Write-Host '⚠️ 服务已经注册，但健康检查没有通过。' -ForegroundColor Yellow
