@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.6")
+app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.7")
 API_BASE = "https://api.agora.io/cn/api/conversational-ai-agent/v2/projects"
 
 
@@ -209,20 +209,57 @@ def _build_llm(provider: str | None) -> dict[str, Any]:
     }
 
 
-def _build_tts() -> dict[str, Any]:
-    """Build Shengwang v2.10 generic_http TTS config.
+def _tts_mode() -> str:
+    mode = os.getenv("SHENGWANG_TTS_MODE", "minimax").strip().lower()
+    if mode not in {"minimax", "generic_http"}:
+        raise HTTPException(status_code=500, detail="SHENGWANG_TTS_MODE 仅支持 minimax 或 generic_http")
+    return mode
 
-    REST schema is intentionally different from our previous prototype:
-    tts.url / tts.headers live at the TTS object top level, while model/voice/
-    sample_rate/response_format belong to tts.params. Putting url inside params
-    lets the agent be created but leaves it without a callable TTS endpoint.
+
+def _build_tts() -> dict[str, Any]:
+    """Prefer a Shengwang-native CN TTS vendor for production reliability.
+
+    generic_http remains available for experiments, but it requires Shengwang cloud
+    to reach our public HTTP endpoint. In the current Vercel deployment that path
+    has proven unreliable, so the default is native MiniMax BYOK.
     """
+    mode = _tts_mode()
+    if mode == "minimax":
+        key = os.getenv("SHENGWANG_TTS_API_KEY", "").strip()
+        group_id = os.getenv("SHENGWANG_TTS_GROUP_ID", "").strip()
+        missing = [name for name, value in [
+            ("SHENGWANG_TTS_API_KEY", key),
+            ("SHENGWANG_TTS_GROUP_ID", group_id),
+        ] if not value]
+        if missing:
+            raise HTTPException(
+                status_code=503,
+                detail=f"声网原生 MiniMax TTS 未配置：缺少 {', '.join(missing)}",
+            )
+        return {
+            "vendor": "minimax",
+            "params": {
+                "group_id": group_id,
+                "key": key,
+                "model": os.getenv("SHENGWANG_TTS_MODEL", "speech-01-turbo"),
+                "voice_setting": {
+                    "voice_id": os.getenv("SHENGWANG_TTS_VOICE_ID", "female-shaonv"),
+                    "speed": _env_float("SHENGWANG_TTS_SPEED", None, 1.0),
+                    "vol": _env_float("SHENGWANG_TTS_VOLUME", None, 1.0),
+                    "pitch": _env_int("SHENGWANG_TTS_PITCH", None, 0),
+                },
+                "audio_setting": {
+                    "sample_rate": _env_int("SHENGWANG_TTS_SAMPLE_RATE", None, 16000),
+                },
+                "language_boost": os.getenv("SHENGWANG_TTS_LANGUAGE_BOOST", "auto"),
+            },
+        }
+
     if not os.getenv("GEMINI_API_KEY", "").strip():
-        raise HTTPException(status_code=503, detail="未配置 GEMINI_API_KEY")
+        raise HTTPException(status_code=503, detail="generic_http 模式需要 GEMINI_API_KEY")
     url = _custom_tts_url()
     if not url:
-        raise HTTPException(status_code=503, detail="无法确定 Gemini TTS Bridge 地址，请配置 LABSIGHT_PUBLIC_BASE_URL 或 SHENGWANG_TTS_URL")
-
+        raise HTTPException(status_code=503, detail="generic_http 模式缺少 SHENGWANG_TTS_URL / 公网 TTS Bridge URL")
     params: dict[str, Any] = {
         "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
         "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"),
@@ -230,14 +267,7 @@ def _build_tts() -> dict[str, Any]:
         "response_format": "pcm",
         "instruction": os.getenv("SHENGWANG_TTS_INSTRUCTION", "使用自然、清晰、专业但简洁的普通话播报，技术型号和单位准确朗读。"),
     }
-    tts: dict[str, Any] = {
-        "vendor": "generic_http",
-        "url": url,
-        "params": params,
-    }
-
-    # REST v2.10 exposes custom headers at tts.headers. The bridge accepts
-    # Authorization: Bearer <secret>; do not put credentials inside params.
+    tts: dict[str, Any] = {"vendor": "generic_http", "url": url, "params": params}
     custom_key = os.getenv("SHENGWANG_CUSTOM_TTS_API_KEY", "").strip()
     if custom_key:
         tts["headers"] = {"Authorization": f"Bearer {custom_key}"}
@@ -279,6 +309,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
     max_wait_ms = _env_int("SHENGWANG_SEMANTIC_MAX_WAIT_MS", None, 3000)
     interrupt_ms = _env_int("SHENGWANG_INTERRUPT_MS", None, 180)
     speaking_interrupt_ms = _env_int("SHENGWANG_SPEAKING_INTERRUPT_MS", None, 220)
+    tts_config = _build_tts()
 
     properties: dict[str, Any] = {
         "channel": channel,
@@ -311,7 +342,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         },
         "interruption": {"enable": True, "mode": "start_of_speech"},
         "llm": _build_llm(req.provider),
-        "tts": _build_tts(),
+        "tts": tts_config,
         "parameters": {"data_channel": "datastream", "enable_error_message": True},
     }
 
@@ -339,12 +370,12 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "turn_detection": {"mode": "semantic", "silence_ms": silence_ms, "max_wait_ms": max_wait_ms},
         "asr": {"vendor": os.getenv("SHENGWANG_ASR_VENDOR", "fengming"), "language": os.getenv("SHENGWANG_ASR_LANGUAGE", "zh-CN")},
         "tts": {
-            "vendor": "generic_http",
-            "provider": "gemini",
-            "url": _custom_tts_url(),
-            "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
-            "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"),
-            "sample_rate": 24000,
+            "vendor": tts_config.get("vendor"),
+            "mode": _tts_mode(),
+            "model": (tts_config.get("params") or {}).get("model"),
+            "voice": ((tts_config.get("params") or {}).get("voice_setting") or {}).get("voice_id") or (tts_config.get("params") or {}).get("voice"),
+            "sample_rate": ((tts_config.get("params") or {}).get("audio_setting") or {}).get("sample_rate") or (tts_config.get("params") or {}).get("sample_rate"),
+            "url": tts_config.get("url"),
         },
     }
 
@@ -389,19 +420,33 @@ def _speak(req: ShengwangSessionRequest) -> dict[str, Any]:
     return {"ok": True, "spoken": True, "agent_id": req.agent_id, "response": data}
 
 
+def _tts_missing() -> list[str]:
+    if _tts_mode() == "minimax":
+        required = ["SHENGWANG_TTS_API_KEY", "SHENGWANG_TTS_GROUP_ID"]
+        return [key for key in required if not os.getenv(key, "").strip()]
+    missing: list[str] = []
+    if not os.getenv("GEMINI_API_KEY", "").strip():
+        missing.append("GEMINI_API_KEY")
+    if not _custom_tts_url():
+        missing.append("SHENGWANG_TTS_URL")
+    return missing
+
+
 @app.get("/api/shengwang_session")
 def health() -> dict[str, Any]:
     missing = []
-    for key in ["SHENGWANG_APP_ID", "SHENGWANG_APP_CERTIFICATE", "SHENGWANG_CUSTOMER_ID", "SHENGWANG_CUSTOMER_SECRET", "GEMINI_API_KEY"]:
-        if not os.getenv(key, "").strip() and not (key.startswith("SHENGWANG_") and os.getenv(key.replace("SHENGWANG_", "AGORA_"), "").strip()):
+    for key in ["SHENGWANG_APP_ID", "SHENGWANG_APP_CERTIFICATE", "SHENGWANG_CUSTOMER_ID", "SHENGWANG_CUSTOMER_SECRET"]:
+        if not os.getenv(key, "").strip() and not os.getenv(key.replace("SHENGWANG_", "AGORA_"), "").strip():
             missing.append(key)
+    missing.extend(_tts_missing())
     return {
         "ok": True,
         "service": "labsight-shengwang-session",
-        "version": "0.10.6",
+        "version": "0.10.7",
         "configured": not missing,
         "missing": missing,
-        "tts_url": _custom_tts_url(),
+        "tts_mode": _tts_mode(),
+        "tts_url": _custom_tts_url() if _tts_mode() == "generic_http" else None,
     }
 
 
