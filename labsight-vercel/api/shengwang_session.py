@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import os
 import random
+import struct
 import time
 import uuid
+import zlib
+from hashlib import sha256
 from typing import Any
 
 import requests
@@ -12,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.3")
+app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.4")
 
 API_BASE = "https://api.agora.io/cn/api/conversational-ai-agent/v2/projects"
 
@@ -49,16 +53,72 @@ def _basic_auth_header() -> str:
     return "Basic " + base64.b64encode(raw).decode("ascii")
 
 
+def _pack_u16(value: int) -> bytes:
+    return struct.pack("<H", int(value))
+
+
+def _pack_u32(value: int) -> bytes:
+    return struct.pack("<I", int(value))
+
+
+def _pack_string(value: bytes) -> bytes:
+    return _pack_u16(len(value)) + value
+
+
+def _pack_privileges(values: dict[int, int]) -> bytes:
+    ordered = sorted(values.items(), key=lambda item: item[0])
+    return _pack_u16(len(ordered)) + b"".join(_pack_u16(k) + _pack_u32(v) for k, v in ordered)
+
+
+def _validate_agora_secret(name: str, value: str) -> None:
+    if len(value) != 32:
+        raise HTTPException(status_code=500, detail=f"{name} 长度应为 32 个十六进制字符")
+    try:
+        bytes.fromhex(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=500, detail=f"{name} 不是有效的十六进制字符串") from exc
+
+
 def _rtc_token(app_id: str, app_cert: str, channel: str, uid: int, ttl: int = 3600) -> str:
-    try:
-        from agora_token_builder import RtcTokenBuilder
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"声网 RTC Token Builder 加载失败：{type(exc).__name__}: {exc}") from exc
-    try:
-        expire_ts = int(time.time()) + ttl
-        return RtcTokenBuilder.buildTokenWithUid(app_id, app_cert, channel, uid, 1, expire_ts)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"生成声网 RTC Token 失败：{type(exc).__name__}: {exc}") from exc
+    """Generate Agora/声网 AccessToken2 (Token007) without a third-party Python package.
+
+    This follows Agora's official AccessToken2/RtcTokenBuilder2 wire format so
+    Vercel does not depend on the legacy `agora-token-builder` PyPI package.
+    """
+    _validate_agora_secret("SHENGWANG_APP_ID", app_id)
+    _validate_agora_secret("SHENGWANG_APP_CERTIFICATE", app_cert)
+    if not channel or len(channel.encode("utf-8")) >= 64:
+        raise HTTPException(status_code=500, detail="声网 channel 必须为 1~63 字节")
+    if uid < 0 or uid > 0xFFFFFFFF:
+        raise HTTPException(status_code=500, detail="声网 RTC uid 必须在 0~2^32-1 范围内")
+
+    issue_ts = int(time.time())
+    salt = random.randint(1, 99_999_999)
+    app_id_bytes = app_id.encode("utf-8")
+    cert_bytes = app_cert.encode("utf-8")
+
+    # ServiceRtc = service type 1. Publisher privileges: join/audio/video/data.
+    privilege_expire = max(1, int(ttl))
+    service = (
+        _pack_u16(1)
+        + _pack_privileges({1: privilege_expire, 2: privilege_expire, 3: privilege_expire, 4: privilege_expire})
+        + _pack_string(channel.encode("utf-8"))
+        + _pack_string(b"" if uid == 0 else str(uid).encode("utf-8"))
+    )
+
+    signing = hmac.new(_pack_u32(issue_ts), cert_bytes, sha256).digest()
+    signing = hmac.new(_pack_u32(salt), signing, sha256).digest()
+    signing_info = (
+        _pack_string(app_id_bytes)
+        + _pack_u32(issue_ts)
+        + _pack_u32(max(1, int(ttl)))
+        + _pack_u32(salt)
+        + _pack_u16(1)
+        + service
+    )
+    signature = hmac.new(signing, signing_info, sha256).digest()
+    raw = _pack_string(signature) + signing_info
+    return "007" + base64.b64encode(zlib.compress(raw)).decode("ascii")
 
 
 def _public_base_url() -> str:
@@ -301,9 +361,10 @@ def shengwang_session_health():
     return {
         "ok": True,
         "service": "shengwang-session",
-        "version": "0.10.3",
+        "version": "0.10.4",
         "configured": not missing,
         "missing": missing,
+        "token_builder": "builtin-access-token2",
         "tts": {
             "vendor": "generic_http",
             "provider": "gemini",
