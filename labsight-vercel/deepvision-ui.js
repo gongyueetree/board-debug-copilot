@@ -1,5 +1,5 @@
 (() => {
-  const esc = (v='') => String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const esc = (v='') => String(v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot',"'":'&#39;'}[c]));
   const pct = v => Number.isFinite(Number(v)) ? `${Math.round(Number(v) * 100)}%` : '';
   const chip = (text, cls='') => `<span class="dv-chip ${cls}">${esc(text)}</span>`;
   const kindZh = {
@@ -82,12 +82,16 @@
 
     const comps = list((r.components || []).slice(0, 24), x => {
       const candidateList = Array.isArray(x.candidates) ? x.candidates.filter(Boolean) : [];
-      const marking = x.marking || x.likely_part || candidateList[0] || x.category || '型号待确认';
-      const title = [x.reference, marking].filter(Boolean).join(' · ');
+      const marking = x.marking || '';
+      const likelyPart = x.likely_part || candidateList[0] || '';
+      const title = [x.reference, likelyPart || marking || x.category || '型号待确认'].filter(Boolean).join(' · ');
       const desc = x.role || x.category || '';
       const observed = Array.isArray(x.observed) ? x.observed.filter(Boolean).slice(0,4) : [];
-      const inferred = Array.isArray(x.inferred) ? x.inferred.filter(Boolean).slice(0,3) : [];
-      return `<div class="dv-card"><div class="dv-card-head"><strong>${esc(title || '器件')}</strong>${Number.isFinite(Number(x.confidence)) ? chip(pct(x.confidence), Number(x.confidence)>=.8?'good':'warn') : ''}</div>${desc?`<div class="dv-desc">${esc(desc)}</div>`:''}${candidateList.length>1?`<div class="dv-candidates">候选型号：${candidateList.map(c=>chip(c)).join('')}</div>`:''}${observed.length?`<div class="dv-evidence"><b>可见证据：</b>${esc(observed.join('；'))}</div>`:''}${inferred.length?`<div class="dv-infer"><b>工程判断：</b>${esc(inferred.join('；'))}</div>`:''}</div>`;
+      const inferred = Array.isArray(x.inferred) ? x.inferred.filter(Boolean).slice(0,4) : [];
+      const markingLine = marking ? `<div class="dv-evidence"><b>器件印字：</b>${esc(marking)}</div>` : '';
+      const inferenceLine = likelyPart ? `<div class="dv-infer"><b>推断型号：</b>${esc(likelyPart)}${desc?` · <b>功能：</b>${esc(desc)}`:''}</div>` : (desc?`<div class="dv-infer"><b>功能判断：</b>${esc(desc)}</div>`:'');
+      const candidates = candidateList.length > 1 ? `<div class="dv-candidates">其它候选：${candidateList.slice(1).map(c=>chip(c)).join('')}</div>` : '';
+      return `<div class="dv-card"><div class="dv-card-head"><strong>${esc(title || '器件')}</strong>${Number.isFinite(Number(x.confidence)) ? chip(pct(x.confidence), Number(x.confidence)>=.8?'good':'warn') : ''}</div>${markingLine}${inferenceLine}${candidates}${observed.length?`<div class="dv-evidence"><b>识别依据：</b>${esc(observed.join('；'))}</div>`:''}${inferred.length?`<div class="dv-infer"><b>工程判断：</b>${esc(inferred.join('；'))}</div>`:''}</div>`;
     });
 
     const conns = list((r.connectors || []).slice(0, 16), x => {
@@ -108,7 +112,7 @@
       html += `<div class="dv-summary">${esc(cleanSummary)}</div>`;
     }
     html += section('可见丝印与标记','Aa',texts);
-    html += section('关键器件','▣',comps);
+    html += section('关键器件 · 印字→型号→功能','▣',comps);
     html += section('接口与引脚','↔',conns);
     if (chain.length) html += section('信号链','→',`<ol class="dv-steps">${chain.map(x=>`<li>${esc(typeof x==='string'?x:JSON.stringify(x))}</li>`).join('')}</ol>`);
     if (r.board_function) html += section('整板功能','◎',`<div class="dv-prose">${esc(r.board_function)}</div>`);
@@ -126,19 +130,23 @@
   }
 
   async function readableDeepVisionAnalyze(ev) {
-    ev.preventDefault();
-    ev.stopImmediatePropagation();
+    ev?.preventDefault?.();
+    ev?.stopImmediatePropagation?.();
+    if (els.deepVisionBtn?.dataset.running === '1') return;
     if (state.scene !== 'pcb') {
-      document.querySelectorAll('.scene').forEach(x=>x.classList.toggle('active',x.dataset.scene==='pcb'));
       state.scene='pcb';
+      document.querySelectorAll('.scene').forEach(x=>x.classList.toggle('active',x.dataset.scene==='pcb'));
+      if (typeof updateSceneUI === 'function') updateSceneUI();
     }
     const pack = buildDeepVisionPack();
     if (!pack) return;
-    const q = (els.question.value || '').trim() || '深度识别这块 PCB：优先读取板名、所有可见丝印、主要 IC 顶标和型号候选、接口引脚、时钟与频率标记，并分析核心器件和整板功能。所有说明和建议请使用中文。';
+    const q = (els.question.value || '').trim() || '深度识别这块 PCB：逐个读取主要器件顶标/印字，结合封装、周围电路和 KiCad 工程信息，推断最可能的完整型号及功能；对不能唯一确定的器件列出候选型号和置信度。然后读取板名、接口、测试点、时钟/频率标记，并给出整板功能。所有说明和建议请使用中文。';
     addMessage('user', `【PCB 深度视觉】${q}`);
     els.question.value='';
-    const thinking=addMessage('assistant','正在进行 PCB 深度视觉分析：读取整板、丝印、芯片顶标和接口…','thinking');
-    els.deepVisionBtn.disabled=els.analyzeBtn.disabled=els.sendBtn.disabled=true;
+    const thinking=addMessage('assistant','正在进行 PCB 深度视觉分析：读取器件印字，并据此推断型号和功能…','thinking');
+    els.deepVisionBtn.dataset.running='1';
+    els.deepVisionBtn.disabled=true;
+    els.analyzeBtn.disabled=els.sendBtn.disabled=true;
     els.deepVisionState.classList.remove('hidden');
     els.deepVisionState.textContent=`正在分析 1 张整板 + 6 个高清局部区域 · ${state.provider==='gemini'?'Gemini':'OpenAI'}…`;
     try {
@@ -152,15 +160,26 @@
       if(state.conversation.length>20) state.conversation=state.conversation.slice(-20);
       els.deepVisionState.textContent=`完成 · ${d.model} · ${d.source?.images||7} 张图 · 原始 ${d.source?.width||'?'}×${d.source?.height||'?'}`;
       extendSession();
-      if(els.autoSpeak.checked && summary) await speakAnswer(String(summary));
+      // Do not keep the analysis controls disabled while TTS is playing/falling back.
+      // Voice can fail or wait on a remote realtime session; Deep Vision must remain independently clickable.
+      els.deepVisionBtn.disabled=false;
+      els.deepVisionBtn.dataset.running='0';
+      els.analyzeBtn.disabled=els.sendBtn.disabled=false;
+      if(els.autoSpeak.checked && summary) Promise.resolve(speakAnswer(String(summary))).catch(e=>console.warn('deep vision TTS:',e));
     } catch(e) {
       thinking.remove();
       addMessage('assistant',`PCB 深度视觉分析失败：${e.message}`);
       els.deepVisionState.textContent=`失败：${e.message}`;
     } finally {
-      els.deepVisionBtn.disabled=els.analyzeBtn.disabled=els.sendBtn.disabled=false;
+      els.deepVisionBtn.disabled=false;
+      els.deepVisionBtn.dataset.running='0';
+      els.analyzeBtn.disabled=els.sendBtn.disabled=false;
     }
   }
 
-  if (els?.deepVisionBtn) els.deepVisionBtn.addEventListener('click', readableDeepVisionAnalyze, true);
+  if (els?.deepVisionBtn) {
+    els.deepVisionBtn.disabled=false;
+    els.deepVisionBtn.dataset.running='0';
+    els.deepVisionBtn.addEventListener('click', readableDeepVisionAnalyze, true);
+  }
 })();
