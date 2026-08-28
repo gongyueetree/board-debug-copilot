@@ -34,10 +34,15 @@ export interface AssemblyInspectionResult {
   rois: AssemblyAlignmentResult['rois']
 }
 
+function authHeaders(): Record<string, string> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('bdc.token') : null
+  return token ? { authorization: `Bearer ${token}` } : {}
+}
+
 async function send<T>(path: string, body?: unknown, method = 'POST'): Promise<T> {
   const res = await fetch(`${API_BASE}/api/v1${path}`, {
     method,
-    headers: { 'content-type': 'application/json' },
+    headers: { 'content-type': 'application/json', ...authHeaders() },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
   })
   if (!res.ok) {
@@ -62,12 +67,48 @@ export function fileToBase64(file: File): Promise<string> {
 export function useUploadPhoto(projectId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: async (file: File) =>
-      send<{ id: string; sizeBytes: number }>(`/projects/${projectId}/photos`, {
+    mutationFn: async (file: File) => {
+      const mimeType = file.type || 'image/jpeg'
+      const presign = await fetch(`${API_BASE}/api/v1/projects/${projectId}/photos/presign`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ filename: file.name, mimeType, sizeBytes: file.size }),
+      })
+      const pre = await presign.json().catch(() => ({}))
+      if (!presign.ok) throw new Error(pre.message ?? `照片预签名失败（${presign.status}）`)
+
+      if (!pre.isFallback) {
+        const put = await fetch(pre.url, {
+          method: pre.method || 'PUT',
+          headers: pre.headers || {},
+          body: file,
+        })
+        if (!put.ok) {
+          throw new Error(`照片直传对象存储失败（${put.status}）`)
+        }
+
+        const done = await fetch(`${API_BASE}/api/v1/projects/${projectId}/photos/complete`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({
+            objectKey: pre.objectKey,
+            filename: file.name,
+            mimeType,
+            side: 'TOP',
+          }),
+        })
+        const body = await done.json().catch(() => ({}))
+        if (!done.ok) throw new Error(body.message ?? `照片登记失败（${done.status}）`)
+        return body as { id: string; sizeBytes: number }
+      }
+
+      // mock / 本地开发回落。生产 S3/R2 不经过这条路径。
+      return send<{ id: string; sizeBytes: number }>(`/projects/${projectId}/photos`, {
         filename: file.name,
-        mimeType: file.type,
+        mimeType,
         base64: await fileToBase64(file),
-      }),
+      })
+    },
     onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.photos(projectId) }),
   })
 }
