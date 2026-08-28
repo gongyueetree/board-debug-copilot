@@ -16,7 +16,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.7")
+app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.8")
 API_BASE = "https://api.agora.io/cn/api/conversational-ai-agent/v2/projects"
 
 
@@ -26,6 +26,8 @@ class ShengwangSessionRequest(BaseModel):
     channel: str | None = None
     provider: str | None = None
     text: str | None = None
+    # gemini: real Gemini OpenAI-TTS bridge; probe: dependency-free PCM tone.
+    tts_target: str | None = None
 
 
 def _first_env(*names: str, required: bool = True) -> str:
@@ -138,7 +140,17 @@ def _custom_llm_key() -> str:
     return _first_env("SHENGWANG_CUSTOM_LLM_API_KEY", "AGORA_CUSTOM_LLM_API_KEY", required=False) or _app_cert()
 
 
-def _custom_tts_url() -> str:
+def _tts_target(value: str | None) -> str:
+    target = (value or "gemini").strip().lower()
+    if target not in {"gemini", "probe"}:
+        raise HTTPException(status_code=400, detail="tts_target 仅支持 gemini 或 probe")
+    return target
+
+
+def _custom_tts_url(target: str = "gemini") -> str:
+    if target == "probe":
+        base = _public_base_url()
+        return base + "/api/tts_probe" if base else ""
     explicit = os.getenv("SHENGWANG_TTS_URL", "").strip()
     if explicit:
         return explicit
@@ -210,20 +222,18 @@ def _build_llm(provider: str | None) -> dict[str, Any]:
 
 
 def _tts_mode() -> str:
-    mode = os.getenv("SHENGWANG_TTS_MODE", "minimax").strip().lower()
-    if mode not in {"minimax", "generic_http"}:
-        raise HTTPException(status_code=500, detail="SHENGWANG_TTS_MODE 仅支持 minimax 或 generic_http")
+    # Gemini GenericTTS is the default path. MiniMax is retained only as an
+    # explicit optional fallback for users who already have those credentials.
+    mode = os.getenv("SHENGWANG_TTS_MODE", "generic_http").strip().lower()
+    if mode not in {"generic_http", "minimax"}:
+        raise HTTPException(status_code=500, detail="SHENGWANG_TTS_MODE 仅支持 generic_http 或 minimax")
     return mode
 
 
-def _build_tts() -> dict[str, Any]:
-    """Prefer a Shengwang-native CN TTS vendor for production reliability.
-
-    generic_http remains available for experiments, but it requires Shengwang cloud
-    to reach our public HTTP endpoint. In the current Vercel deployment that path
-    has proven unreliable, so the default is native MiniMax BYOK.
-    """
+def _build_tts(target_value: str | None = None) -> dict[str, Any]:
     mode = _tts_mode()
+    target = _tts_target(target_value)
+
     if mode == "minimax":
         key = os.getenv("SHENGWANG_TTS_API_KEY", "").strip()
         group_id = os.getenv("SHENGWANG_TTS_GROUP_ID", "").strip()
@@ -232,10 +242,7 @@ def _build_tts() -> dict[str, Any]:
             ("SHENGWANG_TTS_GROUP_ID", group_id),
         ] if not value]
         if missing:
-            raise HTTPException(
-                status_code=503,
-                detail=f"声网原生 MiniMax TTS 未配置：缺少 {', '.join(missing)}",
-            )
+            raise HTTPException(status_code=503, detail=f"MiniMax TTS 未配置：缺少 {', '.join(missing)}")
         return {
             "vendor": "minimax",
             "params": {
@@ -248,28 +255,37 @@ def _build_tts() -> dict[str, Any]:
                     "vol": _env_float("SHENGWANG_TTS_VOLUME", None, 1.0),
                     "pitch": _env_int("SHENGWANG_TTS_PITCH", None, 0),
                 },
-                "audio_setting": {
-                    "sample_rate": _env_int("SHENGWANG_TTS_SAMPLE_RATE", None, 16000),
-                },
+                "audio_setting": {"sample_rate": _env_int("SHENGWANG_TTS_SAMPLE_RATE", None, 16000)},
                 "language_boost": os.getenv("SHENGWANG_TTS_LANGUAGE_BOOST", "auto"),
             },
         }
 
-    if not os.getenv("GEMINI_API_KEY", "").strip():
-        raise HTTPException(status_code=503, detail="generic_http 模式需要 GEMINI_API_KEY")
-    url = _custom_tts_url()
+    if target == "gemini" and not os.getenv("GEMINI_API_KEY", "").strip():
+        raise HTTPException(status_code=503, detail="Gemini GenericTTS 模式需要 GEMINI_API_KEY")
+
+    url = _custom_tts_url(target)
     if not url:
-        raise HTTPException(status_code=503, detail="generic_http 模式缺少 SHENGWANG_TTS_URL / 公网 TTS Bridge URL")
+        raise HTTPException(status_code=503, detail=f"无法确定 {target} GenericTTS 公网 URL")
+
+    # REST v2.10: tts.url and tts.headers are top-level fields; GenericTTS
+    # protocol parameters live in tts.params. Probe and Gemini deliberately use
+    # identical protocol settings, so the only changing variable is the endpoint.
     params: dict[str, Any] = {
-        "model": os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
-        "voice": os.getenv("GEMINI_TTS_VOICE", "Kore"),
+        "model": "labsight-tts-probe" if target == "probe" else os.getenv("GEMINI_TTS_MODEL", "gemini-3.1-flash-tts-preview"),
+        "voice": "probe" if target == "probe" else os.getenv("GEMINI_TTS_VOICE", "Kore"),
+        "speed": 1.0,
         "sample_rate": 24000,
         "response_format": "pcm",
-        "instruction": os.getenv("SHENGWANG_TTS_INSTRUCTION", "使用自然、清晰、专业但简洁的普通话播报，技术型号和单位准确朗读。"),
     }
+    if target == "gemini":
+        params["instruction"] = os.getenv(
+            "SHENGWANG_TTS_INSTRUCTION",
+            "使用自然、清晰、专业但简洁的普通话播报，技术型号和单位准确朗读。",
+        )
+
     tts: dict[str, Any] = {"vendor": "generic_http", "url": url, "params": params}
     custom_key = os.getenv("SHENGWANG_CUSTOM_TTS_API_KEY", "").strip()
-    if custom_key:
+    if custom_key and target == "gemini":
         tts["headers"] = {"Authorization": f"Bearer {custom_key}"}
     return tts
 
@@ -309,7 +325,8 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
     max_wait_ms = _env_int("SHENGWANG_SEMANTIC_MAX_WAIT_MS", None, 3000)
     interrupt_ms = _env_int("SHENGWANG_INTERRUPT_MS", None, 180)
     speaking_interrupt_ms = _env_int("SHENGWANG_SPEAKING_INTERRUPT_MS", None, 220)
-    tts_config = _build_tts()
+    target = _tts_target(req.tts_target)
+    tts_config = _build_tts(target)
 
     properties: dict[str, Any] = {
         "channel": channel,
@@ -346,7 +363,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "parameters": {"data_channel": "datastream", "enable_error_message": True},
     }
 
-    payload = {"name": f"labsight-{uuid.uuid4().hex[:12]}", "properties": properties}
+    payload = {"name": f"labsight-{target}-{uuid.uuid4().hex[:10]}", "properties": properties}
     response = _request("POST", f"{API_BASE}/{app_id}/join", json_body=payload)
     try:
         data = response.json()
@@ -357,6 +374,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
     if status == "FAILED":
         raise HTTPException(status_code=502, detail=f"声网智能体启动后立即失败：{data}")
 
+    params = tts_config.get("params") or {}
     return {
         "ok": True,
         "mode": "shengwang_realtime_voice",
@@ -372,9 +390,10 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "tts": {
             "vendor": tts_config.get("vendor"),
             "mode": _tts_mode(),
-            "model": (tts_config.get("params") or {}).get("model"),
-            "voice": ((tts_config.get("params") or {}).get("voice_setting") or {}).get("voice_id") or (tts_config.get("params") or {}).get("voice"),
-            "sample_rate": ((tts_config.get("params") or {}).get("audio_setting") or {}).get("sample_rate") or (tts_config.get("params") or {}).get("sample_rate"),
+            "target": target,
+            "model": params.get("model"),
+            "voice": (params.get("voice_setting") or {}).get("voice_id") or params.get("voice"),
+            "sample_rate": (params.get("audio_setting") or {}).get("sample_rate") or params.get("sample_rate"),
             "url": tts_config.get("url"),
         },
     }
@@ -427,8 +446,8 @@ def _tts_missing() -> list[str]:
     missing: list[str] = []
     if not os.getenv("GEMINI_API_KEY", "").strip():
         missing.append("GEMINI_API_KEY")
-    if not _custom_tts_url():
-        missing.append("SHENGWANG_TTS_URL")
+    if not _custom_tts_url("gemini"):
+        missing.append("SHENGWANG_TTS_URL/LABSIGHT_PUBLIC_BASE_URL")
     return missing
 
 
@@ -442,11 +461,12 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "service": "labsight-shengwang-session",
-        "version": "0.10.7",
+        "version": "0.10.8",
         "configured": not missing,
         "missing": missing,
         "tts_mode": _tts_mode(),
-        "tts_url": _custom_tts_url() if _tts_mode() == "generic_http" else None,
+        "gemini_tts_url": _custom_tts_url("gemini") if _tts_mode() == "generic_http" else None,
+        "probe_tts_url": _custom_tts_url("probe") if _tts_mode() == "generic_http" else None,
     }
 
 
