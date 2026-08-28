@@ -7,16 +7,9 @@
   outputSelect.setAttribute('aria-label', '音频输出设备');
   outputSelect.title = 'AI 语音输出设备';
 
-  const testBtn = document.createElement('button');
-  testBtn.id = 'testAudioOutput';
-  testBtn.className = 'secondary';
-  testBtn.textContent = '测试声音';
-  testBtn.title = '播放测试音确认输出设备';
-
   const mic = document.getElementById('micSelect');
   if (mic?.nextSibling) toolbar.insertBefore(outputSelect, mic.nextSibling);
   else toolbar.appendChild(outputSelect);
-  toolbar.insertBefore(testBtn, document.getElementById('refreshDevices'));
 
   let selectedId = localStorage.getItem('labsight-audio-output') || 'default';
 
@@ -60,8 +53,8 @@
     return ctx;
   }
 
-  // All cloud-TTS fallbacks in LabSight ultimately call HTMLMediaElement.play().
-  // Route them through the chosen sink without every voice adapter having to know about the selector.
+  // Route cloud TTS playback through the selected output device without
+  // coupling the voice adapters to audio-output selection logic.
   const nativePlay = HTMLMediaElement.prototype.play;
   if (!HTMLMediaElement.prototype.__labsightSinkWrapped) {
     Object.defineProperty(HTMLMediaElement.prototype, '__labsightSinkWrapped', { value: true });
@@ -71,35 +64,10 @@
     };
   }
 
-  async function testTone() {
-    try {
-      const AudioCtx = window.AudioContext || window.webkitAudioContext;
-      if (!AudioCtx) throw new Error('浏览器不支持 Web Audio');
-      const ctx = new AudioCtx();
-      await applyToAudioContext(ctx);
-      if (ctx.state === 'suspended') await ctx.resume();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.frequency.value = 660;
-      gain.gain.setValueAtTime(0.0001, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.18, ctx.currentTime + 0.03);
-      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.42);
-      osc.connect(gain).connect(ctx.destination);
-      osc.start();
-      osc.stop(ctx.currentTime + 0.45);
-      testBtn.textContent = '正在播放…';
-      setTimeout(async () => { testBtn.textContent = '测试声音'; try { await ctx.close(); } catch {} }, 650);
-    } catch (e) {
-      alert(`无法播放测试音：${e.message}`);
-      testBtn.textContent = '测试声音';
-    }
-  }
-
   outputSelect.addEventListener('change', () => {
     selectedId = outputSelect.value || 'default';
     localStorage.setItem('labsight-audio-output', selectedId);
   });
-  testBtn.addEventListener('click', testTone);
   navigator.mediaDevices.addEventListener?.('devicechange', refreshOutputs);
 
   window.LabSightAudioOutput = {
