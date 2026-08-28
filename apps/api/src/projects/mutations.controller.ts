@@ -1,10 +1,12 @@
 import { Body, Controller, Delete, Get, Headers, Param, Patch, Post } from '@nestjs/common'
 import { StepStatusSchema } from '@app/contracts'
+import { LIMITS } from '@app/storage'
 import { z } from 'zod'
 import { AuthService } from '../auth/auth.service'
 import { bearer } from '../auth/auth.controller'
 import { CloneService } from './clone.service'
 import { MutationsService } from './mutations.service'
+import { PhotoUploadService } from './photo-upload.service'
 import { ReportService } from './report.service'
 
 const RegionSchema = z.object({
@@ -18,6 +20,7 @@ const RegionSchema = z.object({
 export class MutationsController {
   constructor(
     private readonly mutations: MutationsService,
+    private readonly photoUpload: PhotoUploadService,
     private readonly reports: ReportService,
     private readonly auth: AuthService,
     private readonly clone: CloneService,
@@ -45,6 +48,44 @@ export class MutationsController {
     return user
   }
 
+  /** 高清 PCB 照片默认走对象存储直传，避免 Vercel/Railway request body 限制。 */
+  @Post('projects/:id/photos/presign')
+  async presignPhoto(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Headers('authorization') authorization?: string,
+  ) {
+    await this.guard(id, authorization)
+    const input = z
+      .object({
+        filename: z.string().min(1).max(200),
+        mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+        sizeBytes: z.number().int().positive().max(LIMITS.photo.maxBytes),
+      })
+      .parse(body)
+    return this.photoUpload.presign(id, input)
+  }
+
+  /** 浏览器直传完成后只登记元数据；这里不再传图片本体。 */
+  @Post('projects/:id/photos/complete')
+  async completePhoto(
+    @Param('id') id: string,
+    @Body() body: unknown,
+    @Headers('authorization') authorization?: string,
+  ) {
+    await this.guard(id, authorization)
+    const input = z
+      .object({
+        objectKey: z.string().min(1).max(500),
+        filename: z.string().min(1).max(200),
+        mimeType: z.enum(['image/jpeg', 'image/png', 'image/webp']),
+        side: z.enum(['TOP', 'BOTTOM']).optional(),
+      })
+      .parse(body)
+    return this.photoUpload.complete(id, input)
+  }
+
+  /** base64 回落，仅用于 mock/本地环境；生产浏览器应使用 presign + complete。 */
   @Post('projects/:id/photos')
   async uploadPhoto(
     @Param('id') id: string,
@@ -87,7 +128,6 @@ export class MutationsController {
     @Param('id') id: string,
     @Headers('authorization') authorization?: string,
   ) {
-    // 之前这里没鉴权：任何人都能删公共 Demo 的标注
     const projectId = await this.mutations.projectIdForAnnotation(id)
     await this.guard(projectId, authorization)
     return this.mutations.deleteAnnotation(id)
@@ -122,7 +162,6 @@ export class MutationsController {
     @Body() body: unknown,
     @Headers('authorization') authorization?: string,
   ) {
-    // step id 不带项目信息，先反查归属再鉴权 —— 否则知道 id 就能改公共 Demo
     await this.guard(await this.mutations.projectIdForStep(id), authorization)
     const input = z
       .object({
