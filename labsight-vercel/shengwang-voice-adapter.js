@@ -12,6 +12,8 @@
   let active = false;
   let savedAutoSpeak = null;
   let receivedAgentAudio = false;
+  let agentJoinedRtc = false;
+  let agentJoinedUid = null;
   let audioWatchdog = null;
 
   const bar = document.querySelector('.wakebar');
@@ -108,6 +110,16 @@
     return readJsonResponse(r);
   };
 
+  const readTtsBridgeState = async () => {
+    try {
+      const r = await fetch('/api/gemini_tts_openai', {cache:'no-store'});
+      if (!r.ok) return null;
+      return await r.json();
+    } catch {
+      return null;
+    }
+  };
+
   const interrupt = async (silent=false) => {
     if (!session?.agent_id) return;
     try {
@@ -128,6 +140,8 @@
     active = false;
     starting = false;
     receivedAgentAudio = false;
+    agentJoinedRtc = false;
+    agentJoinedUid = null;
     try { window.cancelLabSightSpeech?.(false); } catch {}
     await leaveRtc();
     session = current;
@@ -159,6 +173,8 @@
 
     starting = true;
     receivedAgentAudio = false;
+    agentJoinedRtc = false;
+    agentJoinedUid = null;
     state.listeningSuspended = true;
     try { stopWakeListening(); } catch {}
     try { window.cancelLabSightSpeech?.(false); } catch {}
@@ -168,11 +184,17 @@
       els.autoSpeak.disabled = true;
     }
 
-    setState('正在创建声网智能体…', 'warn');
+    setState('检查 TTS Bridge…', 'warn');
     sessionBtn.disabled = true;
-    if (els.recordingState) els.recordingState.textContent = '正在启动声网实时语音…';
+    if (els.recordingState) els.recordingState.textContent = '正在检查 Gemini TTS Bridge 与声网配置…';
 
     try {
+      const ttsHealth = await readTtsBridgeState();
+      if (!ttsHealth?.ok || ttsHealth?.configured === false) {
+        throw new Error('Gemini TTS Bridge 未就绪，请先确认 GEMINI_API_KEY / Vercel Function');
+      }
+
+      setState('正在创建声网智能体…', 'warn');
       session = await api('start');
       if (!session?.agent_id) throw new Error('声网未返回 agent_id');
       if (session.agent_status && !['RUNNING', 'STARTING'].includes(session.agent_status)) {
@@ -181,16 +203,35 @@
 
       client = RTC.createClient({mode:'rtc', codec:'vp8'});
 
+      client.on('user-joined', (user) => {
+        agentJoinedRtc = true;
+        agentJoinedUid = user.uid;
+        setState('AI 已入 RTC 频道', 'ok');
+        if (els.recordingState) {
+          els.recordingState.textContent = `✅ 声网 Agent 已进入 RTC 频道（uid ${user.uid}），正在等待 AI 音频…`;
+        }
+      });
+
+      client.on('user-left', (user, reason) => {
+        if (String(user.uid) === String(agentJoinedUid)) {
+          agentJoinedRtc = false;
+          setState('AI 已离开 RTC', 'warn');
+          if (els.recordingState) els.recordingState.textContent = `⚠️ 声网 Agent 已离开 RTC（${reason || 'unknown'}）`;
+        }
+      });
+
       client.on('user-published', async (user, mediaType) => {
         try {
           await client.subscribe(user, mediaType);
           if (mediaType === 'audio') {
+            agentJoinedRtc = true;
+            agentJoinedUid = user.uid;
             receivedAgentAudio = true;
             clearWatchdog();
             user.audioTrack?.play();
             setState('AI 正在回答', 'ok');
             interruptBtn.classList.remove('hidden');
-            if (els.recordingState) els.recordingState.textContent = '🔊 AI 正在回答 · 可直接插话，或点击“打断当前回答”';
+            if (els.recordingState) els.recordingState.textContent = '🔊 AI 音轨已到达 · 可直接插话，或点击“打断当前回答”';
           }
         } catch (e) {
           console.warn('声网订阅音频失败:', e);
@@ -232,24 +273,36 @@
       const span = els.voiceBtn?.querySelector('span');
       if (span) span.textContent = '结束实时对话';
       setState('正在验证 AI 音频…', 'warn');
-      if (els.recordingState) els.recordingState.textContent = `🎙 RTC 已连接 · Agent ${session.agent_status || 'RUNNING'} · 正在验证 Gemini TTS 音频`; 
+      if (els.recordingState) els.recordingState.textContent = `🎙 浏览器已加入 RTC · Agent ${session.agent_status || 'RUNNING'} · 正在触发自定义播报`; 
 
-      // Do not show a misleading permanent “正在聆听” state until the agent has
-      // actually published an audio track. The speak endpoint exercises the
-      // exact Agent -> Generic HTTP TTS -> Gemini -> RTC path immediately.
       try {
         await api('speak', {text:'LabSight 实时语音连接成功。你可以开始说话。'});
       } catch (e) {
         throw new Error(`AI 语音链路自检失败：${e.message}`);
       }
 
-      audioWatchdog = setTimeout(() => {
+      audioWatchdog = setTimeout(async () => {
         if (!active || receivedAgentAudio) return;
+        const tts = await readTtsBridgeState();
+        const last = tts?.last_request || null;
+        const freshTtsCall = Number.isFinite(last?.age_seconds) && last.age_seconds < 25;
         setState('AI 音频未到达', 'warn');
-        if (els.recordingState) {
-          els.recordingState.textContent = '⚠️ 声网 Agent 已创建、麦克风已发布，但 10 秒内没有收到 AI 音轨。请检查 Gemini TTS Bridge / 声网 Agent 日志。';
+
+        let msg;
+        if (!agentJoinedRtc) {
+          msg = '⚠️ 浏览器已进入 RTC，但没有观察到声网 Agent 加入频道。优先检查 agent_rtc_uid / Agent RTC token / 声网任务状态。';
+        } else if (!freshTtsCall) {
+          msg = '⚠️ 声网 Agent 已进入 RTC，但 Gemini TTS Bridge 在本轮没有收到声网侧 HTTP 请求。高度怀疑声网云到当前 Vercel TTS URL 不可达，或 GenericTTS URL/headers 未被任务采用。';
+        } else if (last?.status === 'error') {
+          msg = `⚠️ 声网已调用 Gemini TTS Bridge，但 TTS 生成失败（${last.latency_ms ?? '?'}ms）。请点“测试 Gemini TTS”查看上游错误。`;
+        } else if (last?.status === 'ok') {
+          msg = `⚠️ 声网已调用 TTS，Bridge 已返回 PCM（${last.bytes ? Math.round(last.bytes/1024) + 'KB' : '已返回'}，${last.latency_ms ?? '?'}ms），但 RTC 未收到 AI 音轨。此时问题位于声网 GenericTTS 解码/发布音频这一段。`;
+        } else {
+          msg = '⚠️ 声网 Agent 已进入 RTC，但仍未收到 AI 音轨；请检查 TTS Bridge 与声网 Agent 日志。';
         }
-      }, 10000);
+        if (els.recordingState) els.recordingState.textContent = msg;
+        console.warn('Shengwang audio watchdog', {agentJoinedRtc, agentJoinedUid, tts});
+      }, 18000);
     } catch (e) {
       console.error('声网启动失败:', e);
       await leaveRtc();
