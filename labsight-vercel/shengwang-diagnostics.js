@@ -23,6 +23,47 @@
     pill.className = `pill ${kind}`;
   };
 
+  const formatDuration = (seconds) => {
+    const s = Math.max(0, Number(seconds || 0));
+    if (!s) return '';
+    const h = Math.floor(s / 3600);
+    const m = Math.ceil((s % 3600) / 60);
+    if (h && m) return `${h} 小时 ${m} 分`;
+    if (h) return `${h} 小时`;
+    return `${Math.max(1, m)} 分钟`;
+  };
+
+  const normalizeError = (status, data, fallbackText='') => {
+    const detail = data?.detail;
+    if (detail && typeof detail === 'object') {
+      if (detail.code === 'gemini_tts_quota_exhausted') {
+        const retry = formatDuration(detail.retry_after_seconds);
+        const limit = detail.daily_limit ? `每日额度 ${detail.daily_limit} 次` : '';
+        const model = detail.model || '';
+        return {
+          title: 'Gemini TTS 配额已耗尽',
+          summary: [limit, model, retry ? `约 ${retry} 后恢复` : '等待配额恢复'].filter(Boolean).join(' · '),
+          detail: detail.provider_message || '',
+          quota: true,
+        };
+      }
+      return {
+        title: `Gemini TTS 请求失败（HTTP ${status}）`,
+        summary: detail.message || '上游服务返回错误',
+        detail: detail.provider_message || '',
+      };
+    }
+    const text = typeof detail === 'string' ? detail : (fallbackText || JSON.stringify(data || {}));
+    return {title:`Gemini TTS 请求失败（HTTP ${status}）`, summary:text, detail:''};
+  };
+
+  const showDiagnosticMessage = (diag) => {
+    const recording = document.getElementById('recordingState');
+    if (!recording) return;
+    recording.textContent = `❌ ${diag.title}${diag.summary ? `：${diag.summary}` : ''}`;
+    recording.title = diag.detail || diag.summary || diag.title;
+  };
+
   const pcm16ToAudioBuffer = (arrayBuffer, sampleRate=24000) => {
     const bytes = new Uint8Array(arrayBuffer);
     const usable = bytes.byteLength - (bytes.byteLength % 2);
@@ -60,49 +101,48 @@
     try {
       const response = await fetch('/api/gemini_tts_openai', {
         method: 'POST',
-        headers: {'Content-Type': 'application/json'},
+        headers: {'Content-Type':'application/json'},
         body: JSON.stringify({
-          model: 'gemini-3.1-flash-tts-preview',
-          input: 'LabSight Gemini TTS 测试成功。',
-          voice: 'Kore',
-          response_format: 'pcm',
+          input:'LabSight Gemini TTS 测试成功。',
+          voice:'Kore',
+          response_format:'pcm',
         }),
       });
       const elapsedMs = Math.round(performance.now() - started);
       const contentType = response.headers.get('content-type') || 'unknown';
       const sampleRate = Number(response.headers.get('x-sample-rate') || 24000);
+
       if (!response.ok) {
-        let detail = '';
-        try {
-          const data = await response.json();
-          detail = data?.detail || JSON.stringify(data);
-        } catch {
-          detail = await response.text();
-        }
-        throw new Error(`HTTP ${response.status} · ${detail || response.statusText}`);
+        let data = null;
+        let text = '';
+        try { data = await response.json(); }
+        catch { try { text = await response.text(); } catch {} }
+        const diag = normalizeError(response.status, data, text);
+        setState(diag.quota ? 'TTS 配额耗尽' : 'Gemini TTS 失败', 'warn');
+        showDiagnosticMessage(diag);
+        console.warn('Gemini TTS diagnostics:', diag);
+        return;
       }
+
       const pcm = await response.arrayBuffer();
-      if (pcm.byteLength < 1000) {
-        throw new Error(`返回音频过短：${pcm.byteLength} bytes`);
-      }
+      if (pcm.byteLength < 1000) throw new Error(`返回音频过短：${pcm.byteLength} bytes`);
       setState(`PCM ${Math.round(pcm.byteLength/1024)}KB · ${elapsedMs}ms`, 'ok');
-      if (window.els?.recordingState) {
-        window.els.recordingState.textContent = `✅ Gemini TTS：HTTP ${response.status} · ${contentType} · ${pcm.byteLength} bytes · ${sampleRate}Hz · ${elapsedMs}ms；正在本机播放测试音频。`;
+      const recording = document.getElementById('recordingState');
+      if (recording) {
+        recording.textContent = `✅ Gemini TTS 正常：HTTP ${response.status} · ${contentType} · ${Math.round(pcm.byteLength/1024)}KB · ${sampleRate}Hz · ${elapsedMs}ms`;
+        recording.title = '';
       }
       await playPcm(pcm, sampleRate);
       setState('Gemini TTS 正常', 'ok');
     } catch (e) {
       console.error('Gemini TTS test failed:', e);
       setState('Gemini TTS 失败', 'warn');
-      const msg = `❌ Gemini TTS 测试失败：${e.message}`;
-      const recording = document.getElementById('recordingState');
-      if (recording) recording.textContent = msg;
-      try { window.addMessage?.('assistant', msg); } catch {}
+      showDiagnosticMessage({title:'Gemini TTS 测试失败', summary:e.message, detail:''});
     } finally {
       btn.disabled = false;
     }
   };
 
   btn.addEventListener('click', testGeminiTts);
-  window.LabSightShengwangDiagnostics = { testGeminiTts };
+  window.LabSightShengwangDiagnostics = {testGeminiTts};
 })();
