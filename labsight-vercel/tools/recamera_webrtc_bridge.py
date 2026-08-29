@@ -38,7 +38,7 @@ async def cors_middleware(request: web.Request, handler):
     return cors(response)
 
 
-def make_rtsp(camera_ip: str, username: str, password: str, path: str = "/live") -> str:
+def make_rtsp(camera_ip: str, username: str, password: str, path: str = "/main") -> str:
     user = quote(username or "", safe="")
     pwd = quote(password or "", safe="")
     auth = f"{user}:{pwd}@" if (username or password) else ""
@@ -63,7 +63,7 @@ async def offer(request: web.Request):
     camera_ip = str(body.get("camera_ip") or "").strip()
     username = str(body.get("username") or "admin")
     password = str(body.get("password") or "")
-    rtsp_path = str(body.get("rtsp_path") or "/live")
+    rtsp_path = str(body.get("rtsp_path") or "/main")
     if not sdp or not typ:
         raise web.HTTPBadRequest(text=json.dumps({"error": "missing sdp/type"}), content_type="application/json")
     if not camera_ip:
@@ -129,7 +129,7 @@ async def shutdown(app: web.Application):
 def main():
     parser = argparse.ArgumentParser(description="LabSight reCamera RTSP→WebRTC local bridge")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=18765)
     args = parser.parse_args()
 
     app = web.Application(middlewares=[cors_middleware])

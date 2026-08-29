@@ -60,6 +60,32 @@ GEMINI_AUDIO_MODEL=gemini-2.5-flash
 - 延迟
 - 成本
 
+## reCamera Pro 本地 Bridge
+
+浏览器不能直接读取 RTSP。选择 `Seeed reCamera Pro（Wi‑Fi）` 后，页面通过仅监听本机的 RTSP→WebRTC Bridge 获取视频。
+
+连接参数：
+
+- reCamera IP：设备的局域网 IP，例如 `192.168.42.1`
+- 用户名和密码：设备 RTSP 认证信息；页面不会持久化密码
+- RTSP 路径：默认 `/main`，可按设备固件修改
+- Bridge 端口：默认 `18765`，必须与启动 Bridge 时传入的 `--port` 一致
+
+开发环境手动启动，不会注册开机启动：
+
+```bash
+python -m pip install -r tools/requirements-recamera-bridge.txt
+python tools/recamera_webrtc_bridge.py --host 127.0.0.1 --port 18765
+```
+
+页面会先请求 `http://127.0.0.1:<Bridge 端口>/health`。显示“WebRTC 后台服务已就绪”后，再提交设备连接信息。Bridge 根据这些信息在本机生成：
+
+```text
+rtsp://<用户名>:<密码>@<设备 IP>:554<RTSP 路径>
+```
+
+Bridge 必须保持监听 `127.0.0.1`，不要改为局域网地址。
+
 ## 数据路径
 
 ```text

@@ -36,7 +36,7 @@ class ConfigureRequest(BaseModel):
     camera_ip: str
     username: str = "admin"
     password: str = ""
-    rtsp_path: str = "/live"
+    rtsp_path: str = "/main"
     rtsp_port: int = 554
 
 @dataclass
@@ -179,6 +179,6 @@ def frame_jpg():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="LabSight local RTSP bridge for Seeed reCamera Pro")
     parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8765)
+    parser.add_argument("--port", type=int, default=18765)
     args = parser.parse_args()
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")

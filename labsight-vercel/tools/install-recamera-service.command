@@ -30,7 +30,7 @@ cat > "$PLIST" <<EOF
     <string>$PY</string>
     <string>$SCRIPT_DIR/recamera_webrtc_bridge.py</string>
     <string>--host</string><string>127.0.0.1</string>
-    <string>--port</string><string>8765</string>
+    <string>--port</string><string>18765</string>
   </array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
@@ -46,11 +46,11 @@ launchctl bootstrap "gui/$(id -u)" "$PLIST"
 launchctl kickstart -k "gui/$(id -u)/$LABEL"
 
 for i in {1..30}; do
-  if curl -fsS http://127.0.0.1:8765/health >/dev/null 2>&1; then
+  if curl -fsS http://127.0.0.1:18765/health >/dev/null 2>&1; then
     echo ""
     echo "✅ LabSight reCamera WebRTC 后台服务已安装并启动。"
     echo "以后登录 Mac 会自动运行，不需要再启动 Python。"
-    echo "健康检查：http://127.0.0.1:8765/health"
+    echo "健康检查：http://127.0.0.1:18765/health"
     echo ""
     read "?按回车关闭…"
     exit 0
