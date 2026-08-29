@@ -1,7 +1,7 @@
 import 'reflect-metadata'
 import { Logger } from '@nestjs/common'
 import { NestFactory } from '@nestjs/core'
-import { json, urlencoded } from 'express'
+import type { NestExpressApplication } from '@nestjs/platform-express'
 import { assertStorageUsable, describeStorage } from '@app/storage'
 import { AppModule } from './app.module'
 import { ZodExceptionFilter } from './common/zod-exception.filter'
@@ -31,9 +31,15 @@ async function bootstrap() {
   // Camera captures are sent as JSON/base64 by the current web client. Nest/Express
   // defaults to a ~100 KB JSON body, so 4K PCB screenshots otherwise fail with
   // "request entity too large" before the controller is reached.
-  const app = await NestFactory.create(AppModule, { bodyParser: false })
-  app.use(json({ limit: '20mb' }))
-  app.use(urlencoded({ extended: true, limit: '20mb' }))
+  //
+  // Use NestExpressApplication.useBodyParser instead of importing `express`
+  // directly. With pnpm's strict dependency isolation, @nestjs/platform-express
+  // may depend on express transitively but the API package cannot require it unless
+  // express is declared as a direct dependency. The Nest wrapper keeps the runtime
+  // dependency inside @nestjs/platform-express and preserves the 20 MB upload limit.
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { bodyParser: false })
+  app.useBodyParser('json', { limit: '20mb' })
+  app.useBodyParser('urlencoded', { extended: true, limit: '20mb' })
 
   const origins = (process.env.CORS_ORIGINS ?? 'http://localhost:3000')
     .split(',')
