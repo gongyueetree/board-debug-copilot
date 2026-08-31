@@ -6,10 +6,12 @@ import re
 from typing import Any
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="LabSight PCB Assembly Inspect", version="0.8.3")
+from api._security import rate_limit, require_session
+
+app = FastAPI(title="LabSight PCB Assembly Inspect", version="0.8.4")
 
 MAX_IMAGE_CHARS = 3_200_000
 MAX_MAP_CHARS = 1_800_000
@@ -167,7 +169,9 @@ def _openai(req: AssemblyInspectRequest) -> tuple[dict[str, Any], str]:
 
 
 @app.post("/api/assembly_inspect")
-def assembly_inspect(req: AssemblyInspectRequest):
+def assembly_inspect(req: AssemblyInspectRequest, request: Request):
+    require_session(request)
+    rate_limit(request, "assembly", limit=20, window=300.0)
     if len(req.board_image) > MAX_IMAGE_CHARS or len(req.placement_map_image) > MAX_MAP_CHARS:
         raise HTTPException(status_code=413, detail="装配检查图像过大")
     if not req.footprints:
