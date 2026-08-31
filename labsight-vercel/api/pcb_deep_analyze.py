@@ -6,10 +6,12 @@ import re
 from typing import Any
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="LabSight PCB Deep Vision", version="0.5.3")
+from api._security import rate_limit, require_session
+
+app = FastAPI(title="LabSight PCB Deep Vision", version="0.5.4")
 
 MAX_TOTAL_IMAGE_CHARS = 3_600_000
 MAX_CONTEXT_CHARS = 24_000
@@ -181,7 +183,9 @@ def _openai(req: DeepVisionRequest) -> tuple[dict[str, Any], str, str | None]:
 
 
 @app.post("/api/pcb_deep_analyze")
-def pcb_deep_analyze(req: DeepVisionRequest):
+def pcb_deep_analyze(req: DeepVisionRequest, request: Request):
+    require_session(request)
+    rate_limit(request, "deepvision", limit=20, window=300.0)
     images = [req.overview_image, *req.tile_images]
     if not 1 <= len(images) <= 7:
         raise HTTPException(status_code=400, detail="深度视觉分析需要 1~7 张图像")
