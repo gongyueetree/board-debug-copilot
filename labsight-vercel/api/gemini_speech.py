@@ -7,10 +7,12 @@ import wave
 from typing import Any
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import Response
 
-app = FastAPI(title="LabSight Gemini TTS", version="0.5.1")
+from api._security import rate_limit, require_session
+
+app = FastAPI(title="LabSight Gemini TTS", version="0.5.2")
 
 
 def _pcm16_to_wav(pcm: bytes, sample_rate: int = 24000) -> bytes:
@@ -24,7 +26,9 @@ def _pcm16_to_wav(pcm: bytes, sample_rate: int = 24000) -> bytes:
 
 
 @app.post("/api/gemini_speech")
-def gemini_speech(payload: dict[str, Any]):
+def gemini_speech(payload: dict[str, Any], request: Request):
+    require_session(request)
+    rate_limit(request, "tts", limit=180, window=300.0)
     text = str(payload.get("text", "")).strip()
     if not text:
         raise HTTPException(status_code=400, detail="缺少 text")
