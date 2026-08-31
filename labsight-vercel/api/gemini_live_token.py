@@ -4,9 +4,11 @@ from datetime import datetime, timedelta, timezone
 import os
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 
-app = FastAPI(title="LabSight Gemini Live Token", version="0.5.5")
+from api._security import rate_limit, require_session
+
+app = FastAPI(title="LabSight Gemini Live Token", version="0.5.6")
 
 
 def _iso(dt: datetime) -> str:
@@ -14,7 +16,9 @@ def _iso(dt: datetime) -> str:
 
 
 @app.get("/api/gemini_live_token")
-def gemini_live_token():
+def gemini_live_token(request: Request):
+    require_session(request)
+    rate_limit(request, "livetoken", limit=30, window=300.0)
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=503, detail="未配置 GEMINI_API_KEY")
@@ -29,9 +33,7 @@ def gemini_live_token():
         "newSessionExpireTime": _iso(now + timedelta(minutes=1)),
         "liveConnectConstraints": {
             "model": f"models/{model}",
-            "config": {
-                "responseModalities": ["AUDIO"],
-            },
+            "config": {"responseModalities": ["AUDIO"]},
         },
     }
 
@@ -53,9 +55,4 @@ def gemini_live_token():
     if not token:
         raise HTTPException(status_code=502, detail="Gemini Live 未返回临时令牌")
 
-    return {
-        "token": token,
-        "model": model,
-        "voice": voice,
-        "expires_in_seconds": 120,
-    }
+    return {"token": token, "model": model, "voice": voice, "expires_in_seconds": 120}
