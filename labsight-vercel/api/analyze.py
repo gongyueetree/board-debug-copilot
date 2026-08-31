@@ -5,10 +5,12 @@ import re
 from typing import Any
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="LabSight Analyze", version="0.5.3")
+from api._security import rate_limit, require_session
+
+app = FastAPI(title="LabSight Analyze", version="0.5.4")
 
 MAX_CONTEXT_CHARS = 50_000
 MAX_IMAGE_DATA_URL_CHARS = 3_200_000
@@ -233,7 +235,9 @@ def _call_openai(req: AnalyzeRequest) -> tuple[str, str, str | None]:
 
 
 @app.post("/api/analyze")
-def analyze(req: AnalyzeRequest):
+def analyze(req: AnalyzeRequest, request: Request):
+    require_session(request)
+    rate_limit(request, "analyze", limit=90, window=300.0)
     if not req.image_data_url.startswith("data:image/"):
         raise HTTPException(status_code=400, detail="image_data_url 必须是浏览器截图 data URL")
     if len(req.image_data_url) > MAX_IMAGE_DATA_URL_CHARS:
