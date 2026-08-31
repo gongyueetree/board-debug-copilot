@@ -6,10 +6,12 @@ import re
 from typing import Literal
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 
-app = FastAPI(title="LabSight Scene Detect", version="0.1.0")
+from api._security import rate_limit, require_session
+
+app = FastAPI(title="LabSight Scene Detect", version="0.2.0")
 
 Scene = Literal["pcb", "scope", "instrument", "other"]
 
@@ -132,7 +134,9 @@ def _openai(req: SceneRequest) -> tuple[SceneResult, str]:
 
 
 @app.post("/api/scene_detect")
-def scene_detect(req: SceneRequest):
+def scene_detect(req: SceneRequest, request: Request):
+    require_session(request)
+    rate_limit(request, "scene", limit=240, window=300.0)
     if not req.image_data_url.startswith("data:image/"):
         raise HTTPException(status_code=400, detail="image_data_url 必须是图片 data URL")
     if len(req.image_data_url) > 900_000:
