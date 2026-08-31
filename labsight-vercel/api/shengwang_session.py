@@ -12,11 +12,13 @@ from hashlib import sha256
 from typing import Any
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.10.9")
+from api._security import rate_limit, require_session
+
+app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.11.0")
 API_BASE = "https://api.agora.io/cn/api/conversational-ai-agent/v2/projects"
 
 
@@ -145,10 +147,18 @@ def _build_llm(provider: str | None) -> dict[str, Any]:
     model = _env("SHENGWANG_CUSTOM_LLM_MODEL", "AGORA_CUSTOM_LLM_MODEL", required=False) or selected
     if not url:
         raise HTTPException(status_code=503, detail="无法确定声网自定义 LLM 公网 URL；请配置 LABSIGHT_PUBLIC_BASE_URL")
+    # Transitional rollout: prefer a dedicated random callback secret, but retain
+    # APP_CERTIFICATE fallback until production has SHENGWANG_CUSTOM_LLM_API_KEY.
+    # Remove this fallback after the new secret is configured to avoid breaking
+    # the already-working realtime voice path during the security rollout.
+    gateway_key = (
+        _env("SHENGWANG_CUSTOM_LLM_API_KEY", "AGORA_CUSTOM_LLM_API_KEY", required=False)
+        or _app_cert()
+    )
     return {
         "vendor": "custom",
         "url": url,
-        "api_key": _env("SHENGWANG_CUSTOM_LLM_API_KEY", "AGORA_CUSTOM_LLM_API_KEY", required=False) or _app_cert(),
+        "api_key": gateway_key,
         "system_messages": [{
             "role": "system",
             "content": "你是 LabSight 实时硬件调试助手。使用简体中文，先直接回答用户问题，再给必要下一步；不要重复问题，不要猜测当前不可见画面。",
@@ -348,7 +358,7 @@ def health() -> dict[str, Any]:
     return {
         "ok": True,
         "service": "labsight-shengwang-session",
-        "version": "0.10.9",
+        "version": "0.11.0",
         "configured": not missing,
         "missing": missing,
         "tts_mode": "generic_http",
@@ -360,9 +370,14 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/api/shengwang_session")
-def action(req: ShengwangSessionRequest) -> JSONResponse:
+def action(req: ShengwangSessionRequest, request: Request) -> JSONResponse:
     action_name = (req.action or "start").strip().lower()
+    # stop remains unauthenticated because page unload uses sendBeacon, which
+    # cannot attach the custom session header. It only operates on an agent_id.
+    if action_name != "stop":
+        require_session(request)
     if action_name == "start":
+        rate_limit(request, "shengwang-start", limit=10, window=600.0)
         return JSONResponse(_start(req))
     if action_name == "stop":
         if not req.agent_id:
