@@ -51,8 +51,7 @@
   function refreshDevices() {
     const list = [];
     try {
-      const st = window.state;
-      const stream = st?.stream;
+      const stream = document.getElementById('video')?.srcObject || null;
       if (stream) {
         for (const t of stream.getTracks()) {
           const s = t.getSettings?.() || {};
@@ -76,8 +75,6 @@
     const name = file.name.replace(/\.zip$/i,'');
     const rev = name.match(/(?:rev(?:ision)?|版本|版)[-_ .]*([A-Za-z0-9.]+)/i)?.[1] || '';
     setIdentity({ project:name, board:name, revision:rev }, 'kicad_zip_filename');
-
-    // assembly-inspection.js publishes richer PCB context after parsing.
     setTimeout(() => {
       const ctx = window.labsightAssemblyContext;
       if (!ctx) return;
@@ -130,11 +127,15 @@
     new MutationObserver(ms => ms.forEach(m => m.addedNodes.forEach(scan))).observe(chat,{childList:true,subtree:true});
   }
 
+  function currentScene() {
+    return document.querySelector('.scene.active')?.dataset.scene || 'unknown';
+  }
+
   function bindEvidenceHooks() {
     const capture = document.getElementById('captureBtn');
     capture?.addEventListener('click', () => setTimeout(() => {
       const meta = document.getElementById('captureMeta')?.textContent || '';
-      record('camera_capture', { meta, scene: window.state?.scene || 'unknown' }, 'camera');
+      record('camera_capture', { meta, scene: currentScene() }, 'camera');
     }, 120));
 
     document.getElementById('startCamera')?.addEventListener('click', () => setTimeout(() => {
@@ -174,7 +175,7 @@
     const i = session.identity;
     const identityText = i.board || i.project || '未确认';
     const events = session.events.slice(-8).reverse();
-    const deviceText = session.devices.length ? session.devices.map(d => `${d.type==='rgb_camera'?'Camera':'Mic'} · ${d.label}`).join('<br>') : '尚未发现设备';
+    const deviceText = session.devices.length ? session.devices.map(d => `${d.type==='rgb_camera'?'Camera':'Mic'} · ${esc(d.label)}`).join('<br>') : '尚未发现设备';
     root.innerHTML = `
       <div class="ds-head">
         <div><h2>Debug Session</h2><p>${esc(session.id)} · ${esc(session.status)}</p></div>
@@ -230,7 +231,6 @@
     observeChat();
     refreshDevices();
 
-    // Public, intentionally small integration surface for later instrument adapters.
     window.LabSightSession = {
       get: () => JSON.parse(JSON.stringify(session)),
       record,
