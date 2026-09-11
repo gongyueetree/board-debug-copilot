@@ -18,7 +18,7 @@ from pydantic import BaseModel
 
 from api._security import rate_limit, require_session
 
-app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.11.0")
+app = FastAPI(title="LabSight Shengwang Voice Adapter", version="0.12.0")
 API_BASE = "https://api.agora.io/cn/api/conversational-ai-agent/v2/projects"
 
 
@@ -147,10 +147,6 @@ def _build_llm(provider: str | None) -> dict[str, Any]:
     model = _env("SHENGWANG_CUSTOM_LLM_MODEL", "AGORA_CUSTOM_LLM_MODEL", required=False) or selected
     if not url:
         raise HTTPException(status_code=503, detail="无法确定声网自定义 LLM 公网 URL；请配置 LABSIGHT_PUBLIC_BASE_URL")
-    # Transitional rollout: prefer a dedicated random callback secret, but retain
-    # APP_CERTIFICATE fallback until production has SHENGWANG_CUSTOM_LLM_API_KEY.
-    # Remove this fallback after the new secret is configured to avoid breaking
-    # the already-working realtime voice path during the security rollout.
     gateway_key = (
         _env("SHENGWANG_CUSTOM_LLM_API_KEY", "AGORA_CUSTOM_LLM_API_KEY", required=False)
         or _app_cert()
@@ -161,7 +157,11 @@ def _build_llm(provider: str | None) -> dict[str, Any]:
         "api_key": gateway_key,
         "system_messages": [{
             "role": "system",
-            "content": "你是 LabSight 实时硬件调试助手。使用简体中文，先直接回答用户问题，再给必要下一步；不要重复问题，不要猜测当前不可见画面。",
+            "content": (
+                "你是 LabSight 实时硬件调试助手。使用简体中文，先直接回答用户问题，再给必要下一步。"
+                "实时语音回答控制在 1 到 4 个完整句子，句子必须完整结束，不要输出半句话，不要重复问题。"
+                "除非用户明确要求，不要使用长列表或 Markdown 表格；不要猜测当前不可见画面。"
+            ),
         }],
         "greeting_message": "LabSight 已连接，我在听。",
         "failure_message": "这个问题我暂时没有判断清楚，请再说一次。",
@@ -170,7 +170,7 @@ def _build_llm(provider: str | None) -> dict[str, Any]:
             "model": model,
             "stream": True,
             "temperature": _env_float("SHENGWANG_LLM_TEMPERATURE", 0.3),
-            "max_tokens": _env_int("SHENGWANG_LLM_MAX_TOKENS", 220),
+            "max_tokens": _env_int("SHENGWANG_LLM_MAX_TOKENS", 384),
         },
     }
 
@@ -182,10 +182,16 @@ def _tts_target(value: str | None) -> str:
     return target
 
 
+def _minimax_key() -> str:
+    return _env("SHENGWANG_TTS_API_KEY", "MINIMAX_API_KEY", required=False)
+
+
 def _tts_mode() -> str:
     mode = os.getenv("SHENGWANG_TTS_MODE", "generic_http").strip().lower()
-    if mode != "generic_http":
-        raise HTTPException(status_code=500, detail="当前 LabSight EVT 仅启用 generic_http/Gemini TTS")
+    if mode not in {"generic_http", "minimax", "auto"}:
+        raise HTTPException(status_code=500, detail="SHENGWANG_TTS_MODE 仅支持 generic_http / minimax / auto")
+    if mode == "auto":
+        return "minimax" if _minimax_key() else "generic_http"
     return mode
 
 
@@ -200,8 +206,7 @@ def _tts_url(target: str) -> str:
     return f"{base}/api/tts_probe" if target == "probe" else f"{base}/api/gemini_tts_openai"
 
 
-def _build_tts(target: str) -> dict[str, Any]:
-    _tts_mode()
+def _build_generic_tts(target: str) -> dict[str, Any]:
     if target == "gemini" and not os.getenv("GEMINI_API_KEY", "").strip():
         raise HTTPException(status_code=503, detail="Gemini GenericTTS 需要 GEMINI_API_KEY")
     url = _tts_url(target)
@@ -221,6 +226,37 @@ def _build_tts(target: str) -> dict[str, Any]:
     if key and target == "gemini":
         tts["headers"] = {"Authorization": f"Bearer {key}"}
     return tts
+
+
+def _build_minimax_tts() -> dict[str, Any]:
+    key = _minimax_key()
+    if not key:
+        raise HTTPException(status_code=503, detail="MiniMax TTS 需要 SHENGWANG_TTS_API_KEY / MINIMAX_API_KEY")
+    params: dict[str, Any] = {
+        "key": key,
+        "model": os.getenv("SHENGWANG_TTS_MODEL", "speech-2.6-turbo").strip() or "speech-2.6-turbo",
+        "voice_setting": {
+            "voice_id": os.getenv("SHENGWANG_TTS_VOICE_ID", "female-shaonv").strip() or "female-shaonv",
+            "speed": _env_float("SHENGWANG_TTS_SPEED", 1.0),
+            "vol": _env_float("SHENGWANG_TTS_VOLUME", 1.0),
+            "pitch": _env_int("SHENGWANG_TTS_PITCH", 0),
+        },
+        "audio_setting": {
+            "sample_rate": _env_int("SHENGWANG_TTS_SAMPLE_RATE", 16000),
+        },
+        "language_boost": os.getenv("SHENGWANG_TTS_LANGUAGE_BOOST", "auto").strip() or "auto",
+    }
+    group_id = os.getenv("SHENGWANG_TTS_GROUP_ID", "").strip()
+    if group_id:
+        params["group_id"] = group_id
+    return {"vendor": "minimax", "params": params}
+
+
+def _build_tts(target: str) -> dict[str, Any]:
+    # Probe intentionally remains on GenericHTTP so it can diagnose Shengwang→Vercel reachability.
+    if target == "probe":
+        return _build_generic_tts(target)
+    return _build_minimax_tts() if _tts_mode() == "minimax" else _build_generic_tts(target)
 
 
 def _request(method: str, url: str, body: dict[str, Any] | None = None, timeout: int = 25) -> requests.Response:
@@ -249,8 +285,13 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
 
     target = _tts_target(req.tts_target)
     threshold = min(0.95, max(0.05, _env_float("SHENGWANG_SPEECH_THRESHOLD", 0.20)))
-    sos_ms = max(120, min(1200, _env_int("SHENGWANG_INTERRUPT_MS", 160)))
-    speaking_sos_ms = max(120, min(1200, _env_int("SHENGWANG_SPEAKING_INTERRUPT_MS", 220)))
+    sos_mode = os.getenv("SHENGWANG_SOS_MODE", "semantic").strip().lower()
+    if sos_mode not in {"semantic", "vad"}:
+        sos_mode = "semantic"
+    # Tuned from Shengwang engineering test feedback: longer human-speech windows
+    # materially reduce false barge-in while the agent is speaking.
+    sos_ms = max(120, min(1200, _env_int("SHENGWANG_INTERRUPT_MS", 480)))
+    speaking_sos_ms = max(120, min(1200, _env_int("SHENGWANG_SPEAKING_INTERRUPT_MS", 600)))
     prefix_ms = max(0, min(5000, _env_int("SHENGWANG_PREFIX_PADDING_MS", 800)))
     eos_mode = os.getenv("SHENGWANG_EOS_MODE", "vad").strip().lower()
     if eos_mode not in {"vad", "semantic"}:
@@ -258,6 +299,15 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
     silence_ms = max(120, min(2000, _env_int("SHENGWANG_VAD_SILENCE_MS", 600)))
     semantic_silence_ms = max(120, min(2000, _env_int("SHENGWANG_SEMANTIC_SILENCE_MS", 240)))
     max_wait_ms = max(300, _env_int("SHENGWANG_SEMANTIC_MAX_WAIT_MS", 3000))
+
+    start_of_speech: dict[str, Any] = {
+        "mode": sos_mode,
+        "vad_config": {
+            "interrupt_duration_ms": sos_ms,
+            "speaking_interrupt_duration_ms": speaking_sos_ms,
+            "prefix_padding_ms": prefix_ms,
+        },
+    }
 
     end_of_speech: dict[str, Any]
     if eos_mode == "semantic":
@@ -272,6 +322,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
     else:
         end_of_speech = {"mode": "vad", "vad_config": {"silence_duration_ms": silence_ms}}
 
+    tts_config = _build_tts(target)
     properties: dict[str, Any] = {
         "channel": channel,
         "token": _rtc_token(app_id, app_cert, channel, agent_uid),
@@ -287,20 +338,13 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
             "mode": "default",
             "config": {
                 "speech_threshold": threshold,
-                "start_of_speech": {
-                    "mode": "vad",
-                    "vad_config": {
-                        "interrupt_duration_ms": sos_ms,
-                        "speaking_interrupt_duration_ms": speaking_sos_ms,
-                        "prefix_padding_ms": prefix_ms,
-                    },
-                },
+                "start_of_speech": start_of_speech,
                 "end_of_speech": end_of_speech,
             },
         },
         "interruption": {"enable": True, "mode": "start_of_speech"},
         "llm": _build_llm(req.provider),
-        "tts": _build_tts(target),
+        "tts": tts_config,
         "parameters": {
             "data_channel": "datastream",
             "enable_error_message": True,
@@ -308,7 +352,7 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         },
     }
 
-    payload = {"name": f"labsight-{target}-{uuid.uuid4().hex[:10]}", "properties": properties}
+    payload = {"name": f"labsight-{tts_config.get('vendor', target)}-{uuid.uuid4().hex[:10]}", "properties": properties}
     response = _request("POST", f"{API_BASE}/{app_id}/join", payload)
     data = response.json()
     if data.get("status") == "FAILED":
@@ -327,12 +371,19 @@ def _start(req: ShengwangSessionRequest) -> dict[str, Any]:
         "asr": {"vendor": properties["asr"]["vendor"], "language": properties["asr"]["language"]},
         "turn_detection": {
             "speech_threshold": threshold,
+            "sos_mode": sos_mode,
             "sos_ms": sos_ms,
+            "speaking_sos_ms": speaking_sos_ms,
             "prefix_ms": prefix_ms,
             "eos_mode": eos_mode,
             "silence_ms": silence_ms if eos_mode == "vad" else semantic_silence_ms,
         },
-        "tts": {"vendor": "generic_http", "target": target, "url": _tts_url(target)},
+        "tts": {
+            "vendor": tts_config.get("vendor", "unknown"),
+            "target": target,
+            "model": (tts_config.get("params") or {}).get("model"),
+            "url": tts_config.get("url"),
+        },
     }
 
 
@@ -353,16 +404,25 @@ def health() -> dict[str, Any]:
     for key in ["SHENGWANG_APP_ID", "SHENGWANG_APP_CERTIFICATE", "SHENGWANG_CUSTOMER_ID", "SHENGWANG_CUSTOMER_SECRET"]:
         if not os.getenv(key, "").strip() and not os.getenv(key.replace("SHENGWANG_", "AGORA_"), "").strip():
             missing.append(key)
-    if not os.getenv("GEMINI_API_KEY", "").strip():
+    tts_mode = _tts_mode()
+    if tts_mode == "minimax":
+        if not _minimax_key():
+            missing.append("SHENGWANG_TTS_API_KEY")
+    elif not os.getenv("GEMINI_API_KEY", "").strip():
         missing.append("GEMINI_API_KEY")
     return {
         "ok": True,
         "service": "labsight-shengwang-session",
-        "version": "0.11.0",
+        "version": "0.12.0",
         "configured": not missing,
         "missing": missing,
-        "tts_mode": "generic_http",
+        "tts_mode": tts_mode,
+        "tts_vendor": "minimax" if tts_mode == "minimax" else "generic_http",
         "speech_threshold": min(0.95, max(0.05, _env_float("SHENGWANG_SPEECH_THRESHOLD", 0.20))),
+        "sos_mode": os.getenv("SHENGWANG_SOS_MODE", "semantic"),
+        "interrupt_ms": _env_int("SHENGWANG_INTERRUPT_MS", 480),
+        "speaking_interrupt_ms": _env_int("SHENGWANG_SPEAKING_INTERRUPT_MS", 600),
+        "prefix_padding_ms": _env_int("SHENGWANG_PREFIX_PADDING_MS", 800),
         "eos_mode": os.getenv("SHENGWANG_EOS_MODE", "vad"),
         "gemini_tts_url": _tts_url("gemini"),
         "probe_tts_url": _tts_url("probe"),
@@ -372,8 +432,6 @@ def health() -> dict[str, Any]:
 @app.post("/api/shengwang_session")
 def action(req: ShengwangSessionRequest, request: Request) -> JSONResponse:
     action_name = (req.action or "start").strip().lower()
-    # stop remains unauthenticated because page unload uses sendBeacon, which
-    # cannot attach the custom session header. It only operates on an agent_id.
     if action_name != "stop":
         require_session(request)
     if action_name == "start":
