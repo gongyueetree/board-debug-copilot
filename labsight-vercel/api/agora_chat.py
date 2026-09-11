@@ -8,17 +8,20 @@ from typing import Any, Iterable
 
 import requests
 from fastapi import FastAPI, Header, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
-app = FastAPI(title="LabSight Voice OpenAI-Compatible LLM Gateway", version="0.10.0")
+app = FastAPI(title="LabSight Voice OpenAI-Compatible LLM Gateway", version="0.11.0")
 
 SYSTEM_PROMPT = (
     "你是 LabSight 的实时语音调试助手，面向电子研发工程师。"
-    "始终使用简体中文，回答短、快、自然，优先 2~5 句话：先给结论，再给下一步。"
+    "始终使用简体中文，回答短、快、自然，优先 1~4 个完整句子：先给结论，再给下一步。"
+    "每个句子必须完整结束，禁止在半句话中结束输出。除非用户明确要求，不要使用长列表或 Markdown 表格。"
     "器件型号、网络名、引脚名、协议名和单位保持原样。"
     "当前实时语音通道还没有自动注入摄像头画面；如果问题明确依赖当前 PCB 或仪器画面，"
     "请直接说明需要当前画面/PCB Deep Vision 证据，不要假装看到了画面。"
 )
+
+LAST_TRACE: dict[str, Any] = {}
 
 
 def _gateway_secret() -> str:
@@ -59,7 +62,8 @@ def _text_content(content: Any) -> str:
 
 
 def _normalized_messages(body: dict[str, Any]) -> list[dict[str, str]]:
-    out = [{"role": "system", "content": SYSTEM_PROMPT}]
+    system = {"role": "system", "content": SYSTEM_PROMPT}
+    history: list[dict[str, str]] = []
     for msg in body.get("messages") or []:
         if not isinstance(msg, dict):
             continue
@@ -68,8 +72,9 @@ def _normalized_messages(body: dict[str, Any]) -> list[dict[str, str]]:
             role = "user"
         text = _text_content(msg.get("content"))
         if text:
-            out.append({"role": role, "content": text})
-    return out[-18:]
+            history.append({"role": role, "content": text})
+    # Keep our LabSight system prompt even when the incoming conversation is long.
+    return [system] + history[-17:]
 
 
 def _temp() -> float:
@@ -77,7 +82,25 @@ def _temp() -> float:
 
 
 def _max_tokens() -> int:
-    return int(os.getenv("SHENGWANG_LLM_MAX_TOKENS", os.getenv("AGORA_LLM_MAX_TOKENS", "220")))
+    return int(os.getenv("SHENGWANG_LLM_MAX_TOKENS", os.getenv("AGORA_LLM_MAX_TOKENS", "384")))
+
+
+def _trace_enabled() -> bool:
+    return os.getenv("SHENGWANG_LLM_TRACE", "0").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _record_trace(provider: str, model: str, output: str, finish_reason: str | None, elapsed_ms: int) -> None:
+    LAST_TRACE.clear()
+    LAST_TRACE.update({
+        "at": int(time.time()),
+        "provider": provider,
+        "model": model,
+        "output_chars": len(output),
+        "finish_reason": finish_reason or "unknown",
+        "elapsed_ms": elapsed_ms,
+    })
+    if _trace_enabled():
+        print(json.dumps({"event": "labsight_voice_llm", **LAST_TRACE, "output": output}, ensure_ascii=False), flush=True)
 
 
 def _openai_stream(messages: list[dict[str, str]]) -> Iterable[bytes]:
@@ -86,6 +109,10 @@ def _openai_stream(messages: list[dict[str, str]]) -> Iterable[bytes]:
         raise HTTPException(status_code=503, detail="实时语音选择 OpenAI，但未配置 OPENAI_API_KEY")
     model = os.getenv("SHENGWANG_OPENAI_MODEL", os.getenv("AGORA_OPENAI_MODEL", "gpt-4o-mini"))
     payload = {"model": model, "messages": messages, "stream": True, "temperature": _temp(), "max_tokens": _max_tokens()}
+    started = time.perf_counter()
+    output_parts: list[str] = []
+    finish_reason: str | None = None
+    saw_done = False
     try:
         with requests.post(
             "https://api.openai.com/v1/chat/completions",
@@ -97,10 +124,31 @@ def _openai_stream(messages: list[dict[str, str]]) -> Iterable[bytes]:
             if r.status_code >= 400:
                 raise HTTPException(status_code=502, detail=f"OpenAI voice gateway error {r.status_code}: {r.text[:1000]}")
             for line in r.iter_lines():
-                if line and line.startswith(b"data:"):
-                    yield line + b"\n\n"
+                if not line or not line.startswith(b"data:"):
+                    continue
+                raw = line[5:].strip()
+                if raw == b"[DONE]":
+                    saw_done = True
+                    _record_trace("openai", model, "".join(output_parts), finish_reason, round((time.perf_counter() - started) * 1000))
+                    yield b"data: [DONE]\n\n"
+                    continue
+                try:
+                    obj = json.loads(raw.decode("utf-8"))
+                    for choice in obj.get("choices") or []:
+                        delta = choice.get("delta") or {}
+                        text = delta.get("content")
+                        if text:
+                            output_parts.append(str(text))
+                        if choice.get("finish_reason") is not None:
+                            finish_reason = str(choice.get("finish_reason"))
+                except Exception:
+                    pass
+                yield b"data: " + raw + b"\n\n"
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"OpenAI voice gateway request failed: {exc}") from exc
+    if not saw_done:
+        _record_trace("openai", model, "".join(output_parts), finish_reason, round((time.perf_counter() - started) * 1000))
+        yield b"data: [DONE]\n\n"
 
 
 def _gemini_messages(messages: list[dict[str, str]]) -> tuple[str, list[dict[str, Any]]]:
@@ -114,15 +162,36 @@ def _gemini_messages(messages: list[dict[str, str]]) -> tuple[str, list[dict[str
     return "\n".join(systems), contents
 
 
-def _openai_chunk(text: str, model: str, chunk_id: str) -> bytes:
+def _openai_chunk(
+    text: str,
+    model: str,
+    chunk_id: str,
+    *,
+    role: str | None = None,
+    finish_reason: str | None = None,
+) -> bytes:
+    delta: dict[str, Any] = {}
+    if role:
+        delta["role"] = role
+    if text:
+        delta["content"] = text
     obj = {
         "id": chunk_id,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
         "model": model,
-        "choices": [{"index": 0, "delta": {"content": text}, "finish_reason": None}],
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
     }
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+def _gemini_finish_reason(value: str | None) -> str:
+    reason = str(value or "STOP").upper()
+    if reason in {"MAX_TOKENS", "MAX_OUTPUT_TOKENS"}:
+        return "length"
+    if reason in {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}:
+        return "content_filter"
+    return "stop"
 
 
 def _gemini_stream(messages: list[dict[str, str]]) -> Iterable[bytes]:
@@ -136,6 +205,13 @@ def _gemini_stream(messages: list[dict[str, str]]) -> Iterable[bytes]:
         payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse"
     chunk_id = f"chatcmpl-labsight-{uuid.uuid4().hex[:16]}"
+    started = time.perf_counter()
+    output_parts: list[str] = []
+    upstream_finish: str | None = None
+
+    # A standards-compliant first role chunk improves compatibility with consumers
+    # that assemble subtitles from OpenAI Chat Completions SSE.
+    yield _openai_chunk("", model, chunk_id, role="assistant")
     try:
         with requests.post(url, headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=payload, stream=True, timeout=60) as r:
             if r.status_code >= 400:
@@ -151,13 +227,36 @@ def _gemini_stream(messages: list[dict[str, str]]) -> Iterable[bytes]:
                 except json.JSONDecodeError:
                     continue
                 for candidate in obj.get("candidates") or []:
+                    if candidate.get("finishReason"):
+                        upstream_finish = str(candidate.get("finishReason"))
                     for part in candidate.get("content", {}).get("parts", []):
                         text = part.get("text")
                         if text:
-                            yield _openai_chunk(text, model, chunk_id)
+                            value = str(text)
+                            output_parts.append(value)
+                            yield _openai_chunk(value, model, chunk_id)
     except requests.RequestException as exc:
         raise HTTPException(status_code=502, detail=f"Gemini voice gateway request failed: {exc}") from exc
+
+    finish_reason = _gemini_finish_reason(upstream_finish)
+    output = "".join(output_parts)
+    _record_trace("gemini", model, output, finish_reason, round((time.perf_counter() - started) * 1000))
+    # The previous bridge ended directly with [DONE]. Some subtitle assemblers rely
+    # on the explicit final finish_reason chunk and can otherwise drop the tail.
+    yield _openai_chunk("", model, chunk_id, finish_reason=finish_reason)
     yield b"data: [DONE]\n\n"
+
+
+@app.get("/api/agora_chat")
+def voice_chat_health() -> JSONResponse:
+    return JSONResponse({
+        "ok": True,
+        "service": "labsight-voice-llm-gateway",
+        "version": "0.11.0",
+        "max_tokens": _max_tokens(),
+        "trace_enabled": _trace_enabled(),
+        "last_trace": LAST_TRACE or None,
+    })
 
 
 @app.post("/api/agora_chat")
@@ -174,4 +273,12 @@ async def voice_chat(
     requested = str(body.get("model") or "").lower()
     provider = "gemini" if "gemini" in requested else "openai"
     generator = _gemini_stream(messages) if provider == "gemini" else _openai_stream(messages)
-    return StreamingResponse(generator, media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+    return StreamingResponse(
+        generator,
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )
