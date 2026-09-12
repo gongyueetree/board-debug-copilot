@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from api._security import rate_limit, require_session
 
-app = FastAPI(title="LabSight KiCad Board Registration", version="0.1.0")
+app = FastAPI(title="LabSight KiCad Board Registration", version="0.2.0")
 
 MAX_IMAGE_CHARS = 3_200_000
 MAX_MAP_CHARS = 1_800_000
@@ -64,15 +64,30 @@ def _extract_json(text: str) -> dict[str, Any]:
 def _prompt(req: BoardRegistrationRequest) -> str:
     anchors = json.dumps(req.anchors[:40], ensure_ascii=False, separators=(",", ":"))
     bbox = json.dumps(req.board_bbox, ensure_ascii=False, separators=(",", ":"))
+    try:
+        bw = max(1e-6, float(req.board_bbox["max_x"]) - float(req.board_bbox["min_x"]))
+        bh = max(1e-6, float(req.board_bbox["max_y"]) - float(req.board_bbox["min_y"]))
+        aspect = bw / bh
+        size_hint = f"{bw:.3f} x {bh:.3f}, aspect={aspect:.5f}"
+    except Exception:
+        size_hint = "unknown"
     return f"""
 你是 LabSight PCB 几何配准器。
-IMAGE 0 是摄像头拍到的真实 PCB；IMAGE 1 是从当前 KiCad .kicad_pcb 生成的 placement map。
+IMAGE 0 是摄像头拍到的真实 PCB；IMAGE 1 是从当前 KiCad .kicad_pcb 的 Edge.Cuts/footprint 坐标生成的 placement map。
 两张图应代表同一块 PCB。你的任务不是识别器件型号，而是把 KiCad 坐标系准确映射到真实照片。
 
 KiCad board_bbox: {bbox}
+KiCad 板框尺寸/比例提示: {size_hint}
 部分锚点 footprint（用于判断方向，不要求逐个识别）: {anchors}
 
-请先利用板框、安装孔、大型连接器、主 IC、晶振等稳定特征判断两张图是否匹配，再给出 IMAGE 0 中真实 PCB 的四个角。
+请先利用“真实 PCB 基材的外边界/Edge.Cuts 对应边缘”、安装孔、大型连接器、主 IC、晶振等稳定特征判断两张图是否匹配，再给出 IMAGE 0 中真实 PCB 的四个对应角。
+
+非常重要：
+1. image_quad 必须落在“PCB 实际基板的四个外边界角”上，不要把丝印文字、焊盘、连接器、Deep Vision ROI 虚线框、阴影或背景桌面当作板框。
+2. 如果 PCB 是圆角矩形，请按四条直边的延长交点/切线交点给出四个几何角；不要把圆角切点当成缩小后的板框。
+3. IMAGE 0 有透视时，四边可以形成梯形；不要为了看起来像矩形而扩大或缩小真实板框。
+4. 输出的四点应尽量满足 KiCad board_bbox 的宽高比例在透视校正后恢复为 {size_hint}。
+5. 看不到完整板框或无法确定某个角时，宁可 matched=false，也不要返回包围器件区域的近似大框。
 
 极其重要：image_quad 的四点必须按 IMAGE 1 / KiCad placement map 的方向对应，而不是按照片视觉上的“左上右上”机械排序：
 0 = placement map 左上角 (min_x,min_y) 在真实照片中的位置
@@ -83,7 +98,7 @@ KiCad board_bbox: {bbox}
 坐标全部是相对 IMAGE 0 宽高的 0~1 归一化坐标。即使 PCB 在照片里旋转、倾斜或透视，也必须保持以上 KiCad 方向对应关系。
 visible_side: 正面器件面为 front，背面为 back，无法判断为 unknown。
 只有能较可靠匹配时 matched=true；看不到完整板框、明显不是同一块板或方向无法判断时 matched=false。
-evidence 最多 4 条简短描述。
+evidence 最多 4 条，优先描述“板框/安装孔/大连接器”等几何证据。
 
 严格只返回 JSON，例如：
 {{
@@ -96,7 +111,7 @@ evidence 最多 4 条简短描述。
     {{"x":0.79,"y":0.82}},
     {{"x":0.16,"y":0.78}}
   ],
-  "evidence": ["四个安装孔一致","USB 接口位置一致"]
+  "evidence": ["真实 PCB 四条外边界清晰","四个安装孔与 placement map 一致"]
 }}
 """.strip()
 
@@ -118,7 +133,7 @@ def _gemini(req: BoardRegistrationRequest) -> tuple[RegistrationResult, str]:
         ]}],
         "generationConfig": {
             "temperature": 0,
-            "maxOutputTokens": 550,
+            "maxOutputTokens": 650,
             "responseMimeType": "application/json",
             "thinkingConfig": {"thinkingBudget": 0},
         },
@@ -145,13 +160,13 @@ def _openai(req: BoardRegistrationRequest) -> tuple[RegistrationResult, str]:
     model = os.getenv("OPENAI_REGISTRATION_MODEL", os.getenv("OPENAI_VISION_MODEL", "gpt-5.6-luna"))
     payload = {
         "model": model,
-        "instructions": "只做 PCB 几何配准。严格返回 JSON。",
+        "instructions": "只做 PCB 几何配准。四点必须是 PCB 实际 Edge.Cuts 外边界角，不得使用 ROI 框或器件包围框。严格返回 JSON。",
         "input": [{"role": "user", "content": [
             {"type": "input_text", "text": _prompt(req)},
             {"type": "input_image", "image_url": req.board_image, "detail": "high"},
             {"type": "input_image", "image_url": req.placement_map_image, "detail": "high"},
         ]}],
-        "max_output_tokens": 550,
+        "max_output_tokens": 650,
     }
     try:
         r = requests.post(
