@@ -40,6 +40,11 @@
     return m ? m[1] : '';
   };
 
+  const fpText = (block, kind) => {
+    const m = block.match(new RegExp('\\(fp_text\\s+' + kind + '\\s+"([^"]*)"', 'i'));
+    return m ? m[1] : '';
+  };
+
   const firstAt = block => {
     const m = block.match(/^\s*\(at\s+([-\d.]+)\s+([-\d.]+)(?:\s+([-\d.]+))?/m);
     return m ? {x:+m[1], y:+m[2], r:+(m[3] || 0)} : null;
@@ -47,9 +52,14 @@
 
   function boardBBox(text, footprints) {
     const pts = [];
-    const edgeBlocks = [...balancedBlocks(text, '(gr_line '), ...balancedBlocks(text, '(gr_arc '), ...balancedBlocks(text, '(gr_rect ')];
+    const edgeBlocks = [
+      ...balancedBlocks(text, '(gr_line '),
+      ...balancedBlocks(text, '(gr_arc '),
+      ...balancedBlocks(text, '(gr_rect '),
+      ...balancedBlocks(text, '(gr_poly '),
+    ];
     edgeBlocks.filter(b => /\(layer\s+"Edge\.Cuts"\)/.test(b)).forEach(b => {
-      for (const m of b.matchAll(/\((?:start|end|mid)\s+([-\d.]+)\s+([-\d.]+)\)/g)) pts.push([+m[1], +m[2]]);
+      for (const m of b.matchAll(/\((?:start|end|mid|xy)\s+([-\d.]+)\s+([-\d.]+)\)/g)) pts.push([+m[1], +m[2]]);
     });
     if (!pts.length) footprints.forEach(f => pts.push([f.x, f.y]));
     const xs = pts.map(p => p[0]), ys = pts.map(p => p[1]);
@@ -62,16 +72,16 @@
       const head = b.match(/^\(footprint\s+"([^"]+)"/);
       const at = firstAt(b);
       if (!at) continue;
-      const reference = prop(b, 'Reference');
+      const reference = prop(b, 'Reference') || fpText(b, 'reference');
       if (!reference) continue;
-      const value = prop(b, 'Value');
+      const value = prop(b, 'Value') || fpText(b, 'value');
       const packageName = head ? head[1] : '';
       const layer = (b.match(/\(layer\s+"([^"]+)"\)/) || [])[1] || '';
       const attr = (b.match(/\(attr\s+([^\)]+)\)/) || [])[1] || '';
       // KiCad may contain footprints that intentionally remain bare copper contacts.
       // Pogo/test/card-edge contacts, mounting holes and test points are not "missing soldered parts".
       const bareContact = /PogoPin|TestPoint|MountingHole|CardEdge|Edge_Connector/i.test(packageName);
-      const excluded = /exclude_from_pos_files|exclude_from_bom/.test(attr) || /^H\d+$/i.test(reference) || /^TP\d+$/i.test(reference) || bareContact;
+      const excluded = /exclude_from_pos_files|exclude_from_bom|\bdnp\b/.test(attr) || /^H\d+$/i.test(reference) || /^TP\d+$/i.test(reference) || bareContact;
       const rad = at.r * Math.PI / 180;
       const pads = [];
       for (const pb of balancedBlocks(b, '(pad ')) {
@@ -134,6 +144,7 @@
         const base = els.projectStatus.textContent.replace(/\s*·\s*装配定位.*$/, '');
         els.projectStatus.textContent = `${base} · 装配定位 ${n} 器件`;
       }
+      window.dispatchEvent(new CustomEvent('labsight:kicad-placement-ready', {detail:{context:assemblyCtx,count:n}}));
       console.debug('Assembly map ready:', assemblyCtx);
     } catch(e) { console.warn('KiCad assembly parser:', e); }
   }
@@ -186,6 +197,13 @@
     const q = String(questionOverride ?? els.question.value ?? '').trim();
     if(state.scene==='pcb' && isAssemblyQuestion(q)) return assemblyInspect(q || '检查哪些器件没有焊接。');
     return legacyAskAI(questionOverride);
+  };
+
+  window.LabSightAssembly = {
+    parsePcb,
+    placementMap,
+    getContext: () => assemblyCtx,
+    inspect: assemblyInspect,
   };
 
   els.projectFile?.addEventListener('change', e => parseProjectFile(e.target.files?.[0]));
