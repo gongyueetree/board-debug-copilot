@@ -1,8 +1,7 @@
 (() => {
   const waitForViewer = (attempt = 0) => {
     const panel = document.querySelector('.pcb-project-preview');
-    const api = window.LabSightPCBViewerV2;
-    if ((!panel || !api) && attempt < 40) {
+    if (!panel && attempt < 40) {
       setTimeout(() => waitForViewer(attempt + 1), 150);
       return;
     }
@@ -63,6 +62,11 @@
 
     const updateHint = () => {
       const s = bottomStats();
+      if (!ctx()) {
+        note.textContent = '底层器件：加载工程后自动切 FB';
+        note.classList.remove('warn');
+        return;
+      }
       if (!s.bottom) {
         note.textContent = '未检测到 B 面器件';
         note.classList.remove('warn');
@@ -95,6 +99,10 @@
 
     const autoDualSideIfUseful = () => {
       const s = bottomStats();
+      if (!ctx()) {
+        updateHint();
+        return;
+      }
       if (!s.bottom) {
         updateHint();
         return;
@@ -105,14 +113,16 @@
       updateHint();
     };
 
-    // v2 parses the project asynchronously. Re-check after the same project input event.
     document.getElementById('projectFile')?.addEventListener('change', () => {
       preferDualSide = true;
       setTimeout(autoDualSideIfUseful, 180);
       setTimeout(autoDualSideIfUseful, 700);
+      setTimeout(autoDualSideIfUseful, 1400);
     });
     window.addEventListener('labsight:kicad-placement-ready', () => {
+      preferDualSide = true;
       setTimeout(autoDualSideIfUseful, 220);
+      setTimeout(autoDualSideIfUseful, 900);
     });
 
     const observer = new MutationObserver(() => {
