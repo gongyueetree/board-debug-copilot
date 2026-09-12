@@ -1,7 +1,7 @@
 (() => {
   // Browser-side ASR input for Shengwang realtime voice.
-  // Voice questions are transcribed first; when a camera frame is available they
-  // are answered by LabSight Vision, then spoken through Shengwang/Gemini TTS.
+  // Keep a short rolling pre-roll locally so the beginning of each utterance is
+  // not clipped by VAD before the recorder starts.
   const bar = document.querySelector('.wakebar');
   if (!bar || !navigator.mediaDevices?.getUserMedia) return;
 
@@ -11,12 +11,20 @@
   pill.textContent = '语音输入待机';
   bar.appendChild(pill);
 
+  const PRE_ROLL_MS = 1100;
+  const TICK_MS = 100;
+  const SPEECH_FRAMES_TO_START = 2;
+  const SILENCE_FRAMES_TO_END = 7;
+
   let running = false;
   let stream = null;
   let ctx = null;
   let analyser = null;
   let timer = null;
   let recorder = null;
+  let recorderMode = 'discard';
+  let recorderStartedAt = 0;
+  let recorderMime = '';
   let chunks = [];
   let speechFrames = 0;
   let silenceFrames = 0;
@@ -38,11 +46,9 @@
   const looksLikeJunk = (text='') => {
     const raw = String(text).trim();
     if (!raw) return true;
-    // Common hallucination produced when the recorder captures silence / AI playback.
     if (/^(?:\s*\d{1,2}:\d{2}(?::\d{2})?\s*){2,}$/.test(raw)) return true;
     const compact = normalizeText(raw);
     if (!compact) return true;
-    // Reject transcripts that contain only digits/time separators and no real words.
     if (/^[0-9:：.-]+$/.test(raw.replace(/\s+/g, ''))) return true;
     return false;
   };
@@ -125,8 +131,6 @@
 
   const transcribe = async (blob, mime) => {
     if (!blob || blob.size < 1200 || processing) return;
-    // Never transcribe audio captured while the AI answer is being played. This
-    // prevents speaker→microphone feedback loops and duplicate visual answers.
     if (Date.now() < suppressUntil) return;
     processing = true;
     setState('正在识别语音…', 'warn');
@@ -157,8 +161,6 @@
 
       const answer = await analyzeCurrentFrame(text);
       if (answer) {
-        // Suspend local VAD for the estimated TTS duration. The browser ASR path
-        // intentionally behaves half-duplex; users can use “打断当前回答” first.
         const answerChars = String(answer).replace(/\s+/g, '').length;
         const holdMs = Math.max(3500, Math.min(20000, 1800 + answerChars * 170));
         suppressUntil = Date.now() + holdMs;
@@ -190,36 +192,52 @@
     }
   };
 
-  const stopRecording = () => {
+  const stopRecorder = (mode='discard') => {
     if (!recorder || recorder.state !== 'recording') return;
+    recorderMode = mode;
     try { recorder.stop(); } catch {}
   };
 
-  const startRecording = () => {
-    if (!stream || recorder?.state === 'recording' || processing || Date.now() < suppressUntil) return;
+  const startRollingRecorder = (mode='discard') => {
+    if (!running || !stream || recorder?.state === 'recording' || processing || Date.now() < suppressUntil) return;
     const mime = ['audio/webm;codecs=opus','audio/webm','audio/mp4'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+    recorderMime = mime || 'audio/webm';
+    recorderMode = mode;
+    recorderStartedAt = Date.now();
     chunks = [];
-    recorder = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined);
-    recorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
-    recorder.onstop = () => {
-      const blob = new Blob(chunks, {type:mime || 'audio/webm'});
+    const localRecorder = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined);
+    recorder = localRecorder;
+    localRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
+    localRecorder.onstop = () => {
+      const finalMode = recorderMode;
+      const finalMime = recorderMime || 'audio/webm';
+      const blob = new Blob(chunks, {type:finalMime});
       chunks = [];
-      transcribe(blob, mime || 'audio/webm');
+      if (recorder === localRecorder) recorder = null;
+      if (finalMode === 'utterance') {
+        transcribe(blob, finalMime).finally(() => {
+          if (running && !processing && Date.now() >= suppressUntil) startRollingRecorder('discard');
+        });
+      } else if (running && !processing && Date.now() >= suppressUntil) {
+        setTimeout(() => startRollingRecorder('discard'), 0);
+      }
     };
-    recorder.start(250);
-    setState('听到你了…', 'ok');
+    localRecorder.start(250);
   };
 
   const tick = () => {
     if (!running || !analyser) return;
-    if (Date.now() < suppressUntil) {
+    const now = Date.now();
+    if (now < suppressUntil) {
       speechFrames = 0;
       silenceFrames = 0;
-      if (recorder?.state === 'recording') stopRecording();
       speaking = false;
-      timer = setTimeout(tick, 100);
+      if (recorder?.state === 'recording') stopRecorder('discard');
+      timer = setTimeout(tick, TICK_MS);
       return;
     }
+
+    if (!processing && !recorder) startRollingRecorder('discard');
 
     const data = new Float32Array(analyser.fftSize);
     analyser.getFloatTimeDomainData(data);
@@ -231,22 +249,30 @@
     if (rms >= threshold) {
       speechFrames += 1;
       silenceFrames = 0;
-      if (!speaking && speechFrames >= 2) {
+      if (!speaking && speechFrames >= SPEECH_FRAMES_TO_START) {
         speaking = true;
-        startRecording();
+        // Recorder has already been running during silence, so the utterance
+        // contains up to PRE_ROLL_MS before VAD fired instead of clipping its first words.
+        if (recorder?.state === 'recording') recorderMode = 'utterance';
+        else startRollingRecorder('utterance');
+        setState('听到你了…', 'ok');
       }
     } else {
       speechFrames = 0;
       if (speaking) {
         silenceFrames += 1;
-        if (silenceFrames >= 7) {
+        if (silenceFrames >= SILENCE_FRAMES_TO_END) {
           speaking = false;
           silenceFrames = 0;
-          stopRecording();
+          if (recorder?.state === 'recording') stopRecorder('utterance');
         }
+      } else if (!processing && recorder?.state === 'recording' && recorderMode === 'discard' && now - recorderStartedAt >= PRE_ROLL_MS) {
+        // Rotate the silent buffer so the next utterance carries ~1.1 s of prefix,
+        // not an arbitrarily long silence recording.
+        stopRecorder('discard');
       }
     }
-    timer = setTimeout(tick, 100);
+    timer = setTimeout(tick, TICK_MS);
   };
 
   const start = async () => {
@@ -278,6 +304,7 @@
       analyser.fftSize = 1024;
       source.connect(analyser);
       setState('正在聆听', 'ok');
+      startRollingRecorder('discard');
       tick();
     } catch (e) {
       running = false;
@@ -294,8 +321,9 @@
     speechFrames = 0;
     silenceFrames = 0;
     suppressUntil = 0;
-    stopRecording();
+    if (recorder?.state === 'recording') stopRecorder('discard');
     recorder = null;
+    chunks = [];
     try { stream?.getTracks().forEach(t => t.stop()); } catch {}
     stream = null;
     analyser = null;
@@ -313,5 +341,10 @@
     }
   }, 500);
 
-  window.LabSightShengwangBrowserAsr = {start, stop, get running(){return running;}};
+  window.LabSightShengwangBrowserAsr = {
+    start,
+    stop,
+    get running(){return running;},
+    get preRollMs(){return PRE_ROLL_MS;},
+  };
 })();
