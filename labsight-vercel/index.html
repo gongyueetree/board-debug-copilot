@@ -13,13 +13,14 @@
   <link rel="stylesheet" href="/agora-voice-adapter.css?v=0.8.3" />
   <link rel="stylesheet" href="/assembly-inspection.css?v=0.8.3" />
   <link rel="stylesheet" href="/footprint-overlay.css?v=0.3.0" />
+  <link rel="stylesheet" href="/pcb-project-viewer.css?v=0.1.0" />
   <link rel="stylesheet" href="/debug-session.css?v=0.17.0" />
 </head>
 <body>
 <header class="topbar">
   <div class="brand">
     <div class="brandmark">LS</div>
-    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.17.3 · PCB 透视校正/原图位号标注 · Evidence Timeline · 声网实时语音 · Gemini</div></div>
+    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.17.4 · KiCad PCB/iBOM 交互预览 · PCB 透视校正/位号标注 · 声网实时语音 · Gemini</div></div>
   </div>
   <div class="statusrow">
     <span id="apiStatus" class="pill neutral">AI 检查中…</span>
@@ -88,7 +89,7 @@
   </div>
 
   <div class="panel project-panel">
-    <div class="panelhead compact"><div><h2>KiCad 工程上下文</h2><p>ZIP 在浏览器本地解析；完整工程不上传到 Vercel。</p></div></div>
+    <div class="panelhead compact"><div><h2>KiCad 工程上下文</h2><p>ZIP 在浏览器本地解析；完整工程不上传到 Vercel。加载后自动生成可缩放、可搜索的 PCB 交互预览。</p></div></div>
     <div id="dropzone" class="dropzone">
       <input id="projectFile" type="file" accept=".zip" />
       <div class="drop-icon">⇧</div><strong>上传 KiCad 工程 ZIP</strong>
@@ -134,7 +135,7 @@
 </section>
 </main>
 
-<footer>LabSight EVT0.17.3 · KiCad Rectified View + Original Photo Ref Overlay + Manual Corner Refinement · Debug Session · 声网实时语音 · UVC / IMX415 / reCamera WebRTC</footer>
+<footer>LabSight EVT0.17.4 · KiCad PCB/iBOM Interactive Preview · Rectified Photo Ref Overlay · Debug Session · 声网实时语音 · UVC / IMX415 / reCamera WebRTC</footer>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.24.7/AgoraRTC_N-production.js"></script>
 <script src="/session-auth.js?v=0.2.0"></script>
@@ -152,6 +153,7 @@
 <script src="/shengwang-voice-adapter.js?v=0.12.0"></script>
 <script src="/shengwang-browser-asr-fallback.js?v=0.1.4"></script>
 <script src="/assembly-inspection.js?v=0.8.4"></script>
+<script src="/pcb-project-viewer.js?v=0.1.0"></script>
 <script src="/footprint-overlay.js?v=0.1.0"></script>
 <script src="/footprint-overlay-adjust.js?v=0.1.0"></script>
 <script src="/footprint-overlay-pro.js?v=0.1.0"></script>
