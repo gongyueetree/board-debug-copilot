@@ -195,6 +195,7 @@
   const stopRecorder = (mode='discard') => {
     if (!recorder || recorder.state !== 'recording') return;
     recorderMode = mode;
+    recorder._labsightMode = mode;
     try { recorder.stop(); } catch {}
   };
 
@@ -206,10 +207,11 @@
     recorderStartedAt = Date.now();
     chunks = [];
     const localRecorder = new MediaRecorder(stream, mime ? {mimeType:mime} : undefined);
+    localRecorder._labsightMode = mode;
     recorder = localRecorder;
     localRecorder.ondataavailable = e => { if (e.data.size) chunks.push(e.data); };
     localRecorder.onstop = () => {
-      const finalMode = recorderMode;
+      const finalMode = localRecorder._labsightMode || 'discard';
       const finalMime = recorderMime || 'audio/webm';
       const blob = new Blob(chunks, {type:finalMime});
       chunks = [];
@@ -253,8 +255,12 @@
         speaking = true;
         // Recorder has already been running during silence, so the utterance
         // contains up to PRE_ROLL_MS before VAD fired instead of clipping its first words.
-        if (recorder?.state === 'recording') recorderMode = 'utterance';
-        else startRollingRecorder('utterance');
+        if (recorder?.state === 'recording') {
+          recorderMode = 'utterance';
+          recorder._labsightMode = 'utterance';
+        } else {
+          startRollingRecorder('utterance');
+        }
         setState('听到你了…', 'ok');
       }
     } else {
@@ -266,7 +272,7 @@
           silenceFrames = 0;
           if (recorder?.state === 'recording') stopRecorder('utterance');
         }
-      } else if (!processing && recorder?.state === 'recording' && recorderMode === 'discard' && now - recorderStartedAt >= PRE_ROLL_MS) {
+      } else if (!processing && recorder?.state === 'recording' && recorder._labsightMode === 'discard' && now - recorderStartedAt >= PRE_ROLL_MS) {
         // Rotate the silent buffer so the next utterance carries ~1.1 s of prefix,
         // not an arbitrarily long silence recording.
         stopRecorder('discard');
