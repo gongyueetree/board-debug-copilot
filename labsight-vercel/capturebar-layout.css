@@ -1,0 +1,18 @@
+.capturebar.capturebar-organized{display:flex;flex-direction:column;align-items:stretch;gap:8px;padding:12px 20px 14px}
+.capturebar-row{display:flex;align-items:center;min-width:0}
+.capturebar-primary-row{gap:9px}
+.capturebar-primary-actions{display:flex;align-items:center;gap:9px;min-width:0;flex:1 1 auto}
+.capturebar-primary-actions>button{white-space:nowrap;flex:0 0 auto}
+.capturebar-primary-actions #analyzeBtn{min-width:148px}
+.capturebar-primary-actions #deepVisionBtn{min-width:150px}
+.capturebar-options{display:flex;align-items:center;justify-content:flex-end;gap:14px;margin-left:auto;padding-left:12px;white-space:nowrap}
+.capturebar-options .toggle{margin-left:0}
+.capturebar-tool-row{gap:8px;padding-top:8px;border-top:1px solid rgba(77,105,128,.24)}
+.capturebar-tool-label{flex:0 0 auto;color:#71889a;font-size:10px;letter-spacing:.05em;text-transform:uppercase;padding-right:2px;white-space:nowrap}
+.capturebar-calibration-actions{display:flex;align-items:center;gap:7px;min-width:0;overflow-x:auto;scrollbar-width:none;padding-bottom:1px}
+.capturebar-calibration-actions::-webkit-scrollbar{display:none}
+.capturebar-calibration-actions>button{height:34px;min-height:34px;padding:0 11px;font-size:11px;white-space:nowrap;border-radius:9px;box-shadow:none}
+.capturebar-calibration-actions .ref-overlay-btn.active,.capturebar-calibration-actions .ref-overlay-mode.active{box-shadow:inset 0 0 0 1px rgba(82,224,210,.16)}
+.capturebar-tool-row.capturebar-tools-empty{display:none}
+@media(max-width:1250px){.capturebar-primary-row{align-items:flex-start;flex-wrap:wrap}.capturebar-options{width:100%;justify-content:flex-start;margin-left:0;padding-left:0}.capturebar-primary-actions{flex-wrap:wrap}}
+@media(max-width:700px){.capturebar.capturebar-organized{padding-left:12px;padding-right:12px}.capturebar-primary-actions{display:grid;grid-template-columns:1fr 1fr;width:100%}.capturebar-primary-actions>button{width:100%;min-width:0!important}.capturebar-primary-actions #deepVisionBtn{grid-column:1/-1}.capturebar-options{gap:10px;flex-wrap:wrap}.capturebar-tool-label{display:none}.capturebar-calibration-actions{width:100%}}
