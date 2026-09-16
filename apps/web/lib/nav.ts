@@ -13,6 +13,7 @@ export function navItems(projectId: string): NavItem[] {
     { label: '项目总览', href: base, phase: 'P2' },
     { label: '设计审查', href: `${base}/design`, phase: 'P3' },
     { label: '调试工作台', href: `${base}/bench`, phase: 'P4' },
+    { label: 'LabSight 调试', href: `${base}/labsight`, phase: 'P4.5' },
     { label: 'PCB照片', href: `${base}/photos`, phase: 'P5' },
     { label: '调试计划', href: `${base}/plan`, phase: 'P6' },
     { label: '测试报告', href: `${base}/report`, phase: 'P7' },
