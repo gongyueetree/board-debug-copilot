@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import uuid
 from typing import Any, Iterable
@@ -10,16 +11,7 @@ import requests
 from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
-app = FastAPI(title="LabSight Voice OpenAI-Compatible LLM Gateway", version="0.11.0")
-
-SYSTEM_PROMPT = (
-    "你是 LabSight 的实时语音调试助手，面向电子研发工程师。"
-    "始终使用简体中文，回答短、快、自然，优先 1~4 个完整句子：先给结论，再给下一步。"
-    "每个句子必须完整结束，禁止在半句话中结束输出。除非用户明确要求，不要使用长列表或 Markdown 表格。"
-    "器件型号、网络名、引脚名、协议名和单位保持原样。"
-    "当前实时语音通道还没有自动注入摄像头画面；如果问题明确依赖当前 PCB 或仪器画面，"
-    "请直接说明需要当前画面/PCB Deep Vision 证据，不要假装看到了画面。"
-)
+app = FastAPI(title="LabSight A6 Voice Gateway", version="0.20.0")
 
 LAST_TRACE: dict[str, Any] = {}
 
@@ -43,7 +35,7 @@ def _check_auth(authorization: str | None, x_api_key: str | None) -> None:
     if not supplied and x_api_key:
         supplied = x_api_key.strip()
     if supplied != expected:
-        raise HTTPException(status_code=401, detail="Invalid LabSight voice LLM gateway credential")
+        raise HTTPException(status_code=401, detail="Invalid LabSight voice gateway credential")
 
 
 def _text_content(content: Any) -> str:
@@ -54,117 +46,70 @@ def _text_content(content: Any) -> str:
         for item in content:
             if isinstance(item, str):
                 parts.append(item)
-            elif isinstance(item, dict):
-                if item.get("type") in {"text", "input_text"} and item.get("text"):
-                    parts.append(str(item["text"]))
+            elif isinstance(item, dict) and item.get("type") in {"text", "input_text"} and item.get("text"):
+                parts.append(str(item["text"]))
         return "\n".join(parts)
     return str(content or "")
 
 
-def _normalized_messages(body: dict[str, Any]) -> list[dict[str, str]]:
-    system = {"role": "system", "content": SYSTEM_PROMPT}
-    history: list[dict[str, str]] = []
-    for msg in body.get("messages") or []:
-        if not isinstance(msg, dict):
+def _last_user_message(body: dict[str, Any]) -> str:
+    for message in reversed(body.get("messages") or []):
+        if isinstance(message, dict) and str(message.get("role") or "") == "user":
+            text = _text_content(message.get("content")).strip()
+            if text:
+                return text
+    raise HTTPException(status_code=400, detail="Voice turn 缺少 user message")
+
+
+def _project_from_messages(body: dict[str, Any]) -> str:
+    pattern = re.compile(r"(?:LABSIGHT_PROJECT_ID|projectId)\s*[=:]\s*([A-Za-z0-9._-]+)")
+    for message in body.get("messages") or []:
+        if not isinstance(message, dict):
             continue
-        role = str(msg.get("role") or "user")
-        if role not in {"system", "user", "assistant", "tool"}:
-            role = "user"
-        text = _text_content(msg.get("content"))
-        if text:
-            history.append({"role": role, "content": text})
-    # Keep our LabSight system prompt even when the incoming conversation is long.
-    return [system] + history[-17:]
+        match = pattern.search(_text_content(message.get("content")))
+        if match:
+            return match.group(1)
+    return ""
 
 
-def _temp() -> float:
-    return float(os.getenv("SHENGWANG_LLM_TEMPERATURE", os.getenv("AGORA_LLM_TEMPERATURE", "0.30")))
+def _project_id(body: dict[str, Any], request: Request, header_value: str | None) -> str:
+    metadata = body.get("metadata") if isinstance(body.get("metadata"), dict) else {}
+    value = (
+        (header_value or "").strip()
+        or str(request.query_params.get("projectId") or "").strip()
+        or str(metadata.get("projectId") or metadata.get("project_id") or "").strip()
+        or _project_from_messages(body)
+        or os.getenv("LABSIGHT_VOICE_PROJECT_ID", "").strip()
+    )
+    if not value:
+        raise HTTPException(
+            status_code=400,
+            detail="A6 voice turn 缺少 projectId；请从宿主传 x-labsight-project-id / metadata.projectId，或测试时配置 LABSIGHT_VOICE_PROJECT_ID",
+        )
+    return value
 
 
-def _max_tokens() -> int:
-    return int(os.getenv("SHENGWANG_LLM_MAX_TOKENS", os.getenv("AGORA_LLM_MAX_TOKENS", "384")))
+def _a6_base_url() -> str:
+    value = (
+        os.getenv("LABSIGHT_A6_API_BASE_URL", "").strip()
+        or os.getenv("NEXT_PUBLIC_API_BASE_URL", "").strip()
+        or os.getenv("API_BASE_URL", "").strip()
+    )
+    if not value:
+        raise HTTPException(status_code=503, detail="未配置 LABSIGHT_A6_API_BASE_URL")
+    return value.rstrip("/")
 
 
-def _trace_enabled() -> bool:
-    return os.getenv("SHENGWANG_LLM_TRACE", "0").strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _record_trace(provider: str, model: str, output: str, finish_reason: str | None, elapsed_ms: int) -> None:
-    LAST_TRACE.clear()
-    LAST_TRACE.update({
-        "at": int(time.time()),
-        "provider": provider,
-        "model": model,
-        "output_chars": len(output),
-        "finish_reason": finish_reason or "unknown",
-        "elapsed_ms": elapsed_ms,
-    })
-    if _trace_enabled():
-        print(json.dumps({"event": "labsight_voice_llm", **LAST_TRACE, "output": output}, ensure_ascii=False), flush=True)
-
-
-def _openai_stream(messages: list[dict[str, str]]) -> Iterable[bytes]:
-    key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not key:
-        raise HTTPException(status_code=503, detail="实时语音选择 OpenAI，但未配置 OPENAI_API_KEY")
-    model = os.getenv("SHENGWANG_OPENAI_MODEL", os.getenv("AGORA_OPENAI_MODEL", "gpt-4o-mini"))
-    payload = {"model": model, "messages": messages, "stream": True, "temperature": _temp(), "max_tokens": _max_tokens()}
-    started = time.perf_counter()
-    output_parts: list[str] = []
-    finish_reason: str | None = None
-    saw_done = False
-    try:
-        with requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json=payload,
-            stream=True,
-            timeout=60,
-        ) as r:
-            if r.status_code >= 400:
-                raise HTTPException(status_code=502, detail=f"OpenAI voice gateway error {r.status_code}: {r.text[:1000]}")
-            for line in r.iter_lines():
-                if not line or not line.startswith(b"data:"):
-                    continue
-                raw = line[5:].strip()
-                if raw == b"[DONE]":
-                    saw_done = True
-                    _record_trace("openai", model, "".join(output_parts), finish_reason, round((time.perf_counter() - started) * 1000))
-                    yield b"data: [DONE]\n\n"
-                    continue
-                try:
-                    obj = json.loads(raw.decode("utf-8"))
-                    for choice in obj.get("choices") or []:
-                        delta = choice.get("delta") or {}
-                        text = delta.get("content")
-                        if text:
-                            output_parts.append(str(text))
-                        if choice.get("finish_reason") is not None:
-                            finish_reason = str(choice.get("finish_reason"))
-                except Exception:
-                    pass
-                yield b"data: " + raw + b"\n\n"
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"OpenAI voice gateway request failed: {exc}") from exc
-    if not saw_done:
-        _record_trace("openai", model, "".join(output_parts), finish_reason, round((time.perf_counter() - started) * 1000))
-        yield b"data: [DONE]\n\n"
-
-
-def _gemini_messages(messages: list[dict[str, str]]) -> tuple[str, list[dict[str, Any]]]:
-    systems: list[str] = []
-    contents: list[dict[str, Any]] = []
-    for msg in messages:
-        if msg["role"] == "system":
-            systems.append(msg["content"])
-            continue
-        contents.append({"role": "model" if msg["role"] == "assistant" else "user", "parts": [{"text": msg["content"]}]})
-    return "\n".join(systems), contents
+def _a6_headers() -> dict[str, str]:
+    headers = {"Content-Type": "application/json", "Accept": "text/event-stream"}
+    token = os.getenv("LABSIGHT_A6_API_TOKEN", "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return headers
 
 
 def _openai_chunk(
     text: str,
-    model: str,
     chunk_id: str,
     *,
     role: str | None = None,
@@ -179,82 +124,91 @@ def _openai_chunk(
         "id": chunk_id,
         "object": "chat.completion.chunk",
         "created": int(time.time()),
-        "model": model,
+        "model": "labsight-a6",
         "choices": [{"index": 0, "delta": delta, "finish_reason": finish_reason}],
     }
     return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
-def _gemini_finish_reason(value: str | None) -> str:
-    reason = str(value or "STOP").upper()
-    if reason in {"MAX_TOKENS", "MAX_OUTPUT_TOKENS"}:
-        return "length"
-    if reason in {"SAFETY", "RECITATION", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII"}:
-        return "content_filter"
-    return "stop"
-
-
-def _gemini_stream(messages: list[dict[str, str]]) -> Iterable[bytes]:
-    key = os.getenv("GEMINI_API_KEY", "").strip()
-    if not key:
-        raise HTTPException(status_code=503, detail="实时语音选择 Gemini，但未配置 GEMINI_API_KEY")
-    model = os.getenv("SHENGWANG_GEMINI_MODEL", os.getenv("AGORA_GEMINI_MODEL", "gemini-2.5-flash"))
-    system_instruction, contents = _gemini_messages(messages)
-    payload: dict[str, Any] = {"contents": contents, "generationConfig": {"temperature": _temp(), "maxOutputTokens": _max_tokens()}}
-    if system_instruction:
-        payload["systemInstruction"] = {"parts": [{"text": system_instruction}]}
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse"
-    chunk_id = f"chatcmpl-labsight-{uuid.uuid4().hex[:16]}"
+def _a6_stream(project_id: str, message: str) -> Iterable[bytes]:
+    url = f"{_a6_base_url()}/api/v1/ai/chat"
+    chunk_id = f"chatcmpl-labsight-a6-{uuid.uuid4().hex[:16]}"
     started = time.perf_counter()
     output_parts: list[str] = []
-    upstream_finish: str | None = None
+    yield _openai_chunk("", chunk_id, role="assistant")
 
-    # A standards-compliant first role chunk improves compatibility with consumers
-    # that assemble subtitles from OpenAI Chat Completions SSE.
-    yield _openai_chunk("", model, chunk_id, role="assistant")
     try:
-        with requests.post(url, headers={"x-goog-api-key": key, "Content-Type": "application/json"}, json=payload, stream=True, timeout=60) as r:
-            if r.status_code >= 400:
-                raise HTTPException(status_code=502, detail=f"Gemini voice gateway error {r.status_code}: {r.text[:1000]}")
-            for raw in r.iter_lines(decode_unicode=True):
-                if not raw or not raw.startswith("data:"):
+        with requests.post(
+            url,
+            headers=_a6_headers(),
+            json={
+                "projectId": project_id,
+                "message": message,
+                "mode": "voice",
+            },
+            stream=True,
+            timeout=75,
+        ) as response:
+            if response.status_code >= 400:
+                raise HTTPException(status_code=502, detail=f"A6 voice upstream {response.status_code}: {response.text[:1200]}")
+
+            event_name = ""
+            for raw in response.iter_lines(decode_unicode=True):
+                line = str(raw or "")
+                if not line:
+                    event_name = ""
                     continue
-                data = raw[5:].strip()
+                if line.startswith("event:"):
+                    event_name = line[6:].strip()
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
                 if not data:
                     continue
                 try:
-                    obj = json.loads(data)
+                    payload = json.loads(data)
                 except json.JSONDecodeError:
                     continue
-                for candidate in obj.get("candidates") or []:
-                    if candidate.get("finishReason"):
-                        upstream_finish = str(candidate.get("finishReason"))
-                    for part in candidate.get("content", {}).get("parts", []):
-                        text = part.get("text")
-                        if text:
-                            value = str(text)
-                            output_parts.append(value)
-                            yield _openai_chunk(value, model, chunk_id)
-    except requests.RequestException as exc:
-        raise HTTPException(status_code=502, detail=f"Gemini voice gateway request failed: {exc}") from exc
 
-    finish_reason = _gemini_finish_reason(upstream_finish)
+                if event_name == "narration":
+                    delta = str(payload.get("delta") or "")
+                    if delta:
+                        output_parts.append(delta)
+                        yield _openai_chunk(delta, chunk_id)
+                elif event_name == "error":
+                    raise HTTPException(status_code=502, detail=str(payload.get("message") or "A6 stream error"))
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"A6 voice gateway request failed: {exc}") from exc
+
+    elapsed_ms = round((time.perf_counter() - started) * 1000)
     output = "".join(output_parts)
-    _record_trace("gemini", model, output, finish_reason, round((time.perf_counter() - started) * 1000))
-    # The previous bridge ended directly with [DONE]. Some subtitle assemblers rely
-    # on the explicit final finish_reason chunk and can otherwise drop the tail.
-    yield _openai_chunk("", model, chunk_id, finish_reason=finish_reason)
+    LAST_TRACE.clear()
+    LAST_TRACE.update({
+        "at": int(time.time()),
+        "brain": "A6",
+        "project_id": project_id,
+        "output_chars": len(output),
+        "elapsed_ms": elapsed_ms,
+    })
+    yield _openai_chunk("", chunk_id, finish_reason="stop")
     yield b"data: [DONE]\n\n"
 
 
 @app.get("/api/agora_chat")
 def voice_chat_health() -> JSONResponse:
+    configured = bool(
+        os.getenv("LABSIGHT_A6_API_BASE_URL", "").strip()
+        or os.getenv("NEXT_PUBLIC_API_BASE_URL", "").strip()
+        or os.getenv("API_BASE_URL", "").strip()
+    )
     return JSONResponse({
         "ok": True,
-        "service": "labsight-voice-llm-gateway",
-        "version": "0.11.0",
-        "max_tokens": _max_tokens(),
-        "trace_enabled": _trace_enabled(),
+        "service": "labsight-a6-voice-gateway",
+        "version": "0.20.0",
+        "brain": "A6",
+        "configured": configured,
+        "project_binding": "header|query|metadata|system-marker|env-fallback",
         "last_trace": LAST_TRACE or None,
     })
 
@@ -264,21 +218,21 @@ async def voice_chat(
     request: Request,
     authorization: str | None = Header(default=None),
     x_api_key: str | None = Header(default=None),
+    x_labsight_project_id: str | None = Header(default=None),
 ):
     _check_auth(authorization, x_api_key)
     body = await request.json()
     if body.get("stream") is False:
         raise HTTPException(status_code=400, detail="Voice Chat Completions requires stream=true")
-    messages = _normalized_messages(body)
-    requested = str(body.get("model") or "").lower()
-    provider = "gemini" if "gemini" in requested else "openai"
-    generator = _gemini_stream(messages) if provider == "gemini" else _openai_stream(messages)
+    project_id = _project_id(body, request, x_labsight_project_id)
+    message = _last_user_message(body)
     return StreamingResponse(
-        generator,
+        _a6_stream(project_id, message),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache, no-transform",
             "X-Accel-Buffering": "no",
             "Connection": "keep-alive",
+            "X-LabSight-Brain": "A6",
         },
     )

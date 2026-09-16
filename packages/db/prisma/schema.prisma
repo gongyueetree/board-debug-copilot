@@ -49,6 +49,51 @@ enum DiagnosisSeverity {
   CRITICAL
 }
 
+enum DebugSessionStatus {
+  OPEN
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+enum BoardStatus {
+  UNKNOWN
+  PASS
+  FAIL
+  REWORK
+}
+
+enum EvidenceKind {
+  IMAGE
+  MEASUREMENT
+  WAVEFORM
+  KICAD
+  VOICE
+  SESSION
+  INSTRUMENT
+  DIAGNOSIS
+  TEST_RESULT
+}
+
+enum SuggestionDraftKind {
+  ISSUE
+  ECO
+}
+
+enum SuggestionDraftStatus {
+  DRAFT
+  SUBMITTED
+  ACCEPTED
+  REJECTED
+}
+
+enum HypothesisStatus {
+  OPEN
+  SUPPORTED
+  REJECTED
+  RESOLVED
+}
+
 // ── P9 器件库 ─────────────────────────────────────────────────
 // 与 packages/parts/src/types.ts 的 PART_CATEGORIES 一一对应，改一边必须改另一边。
 enum PartCategory {
@@ -127,17 +172,22 @@ model Project {
   createdAt     DateTime      @default(now())
   updatedAt     DateTime      @updatedAt
 
-  user       User?           @relation(fields: [userId], references: [id])
-  files      ProjectFile[]
-  components Component[]
-  nets       Net[]
-  testPoints TestPoint[]
-  photos     BoardPhoto[]
-  captures   Capture[]
-  debugSteps DebugStep[]
-  aiThreads  AiThread[]
-  reports    DebugReport[]
-  violations RuleViolation[]
+  user              User?                   @relation(fields: [userId], references: [id])
+  files             ProjectFile[]
+  components        Component[]
+  nets              Net[]
+  testPoints        TestPoint[]
+  photos            BoardPhoto[]
+  captures          Capture[]
+  debugSteps        DebugStep[]
+  aiThreads         AiThread[]
+  reports           DebugReport[]
+  violations        RuleViolation[]
+  boards            Board[]
+  debugSessions     DebugSession[]
+  labEvidence       LabEvidence[]
+  suggestionDrafts  LabSuggestionDraft[]
+  goldenComparisons GoldenBoardComparison[]
 }
 
 model ProjectFile {
@@ -185,6 +235,7 @@ model Component {
   bomMatches       PartMatch[]
   testPoints       TestPoint[]
   photoAnnotations PhotoAnnotation[]
+  labEvidence      LabEvidence[]
 
   @@index([projectId])
   @@index([projectId, ref])
@@ -198,8 +249,9 @@ model Pin {
   type        String?
   netId       String?
 
-  component Component @relation(fields: [componentId], references: [id], onDelete: Cascade)
-  net       Net?      @relation(fields: [netId], references: [id])
+  component   Component     @relation(fields: [componentId], references: [id], onDelete: Cascade)
+  net         Net?          @relation(fields: [netId], references: [id])
+  labEvidence LabEvidence[]
 
   @@index([componentId])
   @@index([netId])
@@ -215,10 +267,11 @@ model Net {
   expectedFrequency String?
   rawJson           Json?
 
-  project    Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  pins       Pin[]
-  testPoints TestPoint[]
-  captures   Capture[]
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pins        Pin[]
+  testPoints  TestPoint[]
+  captures    Capture[]
+  labEvidence LabEvidence[]
 
   @@index([projectId])
   @@index([projectId, name])
@@ -236,9 +289,10 @@ model TestPoint {
   source      String
   createdAt   DateTime @default(now())
 
-  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  component Component? @relation(fields: [componentId], references: [id])
-  net       Net?       @relation(fields: [netId], references: [id])
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  component   Component?    @relation(fields: [componentId], references: [id])
+  net         Net?          @relation(fields: [netId], references: [id])
+  labEvidence LabEvidence[]
 
   @@index([projectId])
 }
@@ -341,19 +395,44 @@ model RuleViolation {
   @@index([projectId, severity])
 }
 
+model Board {
+  id            String      @id @default(uuid())
+  projectId     String
+  designVersion Int
+  serialNo      String?
+  batchNo       String?
+  label         String?
+  status        BoardStatus @default(UNKNOWN)
+  isGolden      Boolean     @default(false)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  project             Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  sessions            DebugSession[]
+  photos              BoardPhoto[]
+  goldenComparisons   GoldenBoardComparison[] @relation("GoldenBoard")
+  targetComparisons   GoldenBoardComparison[] @relation("TargetBoard")
+
+  @@unique([projectId, serialNo])
+  @@index([projectId])
+}
+
 model BoardPhoto {
   id            String   @id @default(uuid())
   projectId     String
+  boardId       String?
   objectKey     String
   side          String?
   alignmentJson Json?
   createdAt     DateTime @default(now())
 
   project        Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  board          Board?            @relation(fields: [boardId], references: [id], onDelete: SetNull)
   annotations    PhotoAnnotation[]
   visualFindings VisualFinding[]
 
   @@index([projectId])
+  @@index([boardId])
 }
 
 model PhotoAnnotation {
@@ -392,6 +471,7 @@ model VisualFinding {
 model Capture {
   id                 String      @id @default(uuid())
   projectId          String
+  sessionId          String?
   netId              String?
   kind               CaptureKind
   label              String?
@@ -402,18 +482,21 @@ model Capture {
   createdAt          DateTime    @default(now())
   debugStepId        String?
 
-  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  net       Net?         @relation(fields: [netId], references: [id])
-  diagnosis AiDiagnosis?
-  debugStep DebugStep?   @relation(fields: [debugStepId], references: [id])
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  session      DebugSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  net          Net?          @relation(fields: [netId], references: [id])
+  diagnosis    AiDiagnosis?
+  debugStep    DebugStep?    @relation(fields: [debugStepId], references: [id])
 
   @@index([projectId])
+  @@index([sessionId])
 }
 
 model AiDiagnosis {
   id                  String            @id @default(uuid())
   captureId           String?           @unique
   projectId           String
+  sessionId           String?
   severity            DiagnosisSeverity
   rootCause           String
   confidence          Float
@@ -422,14 +505,17 @@ model AiDiagnosis {
   rawJson             Json?
   createdAt           DateTime          @default(now())
 
-  capture Capture? @relation(fields: [captureId], references: [id])
+  capture Capture?      @relation(fields: [captureId], references: [id])
+  session DebugSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
 
   @@index([projectId])
+  @@index([sessionId])
 }
 
 model DebugStep {
   id              String     @id @default(uuid())
   projectId       String
+  sessionId       String?
   parentId        String?
   order           Int
   title           String
@@ -446,31 +532,39 @@ model DebugStep {
   createdAt       DateTime   @default(now())
   updatedAt       DateTime   @updatedAt
 
-  project  Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  parent   DebugStep?  @relation("StepTree", fields: [parentId], references: [id])
-  children DebugStep[] @relation("StepTree")
-  captures Capture[]
+  project             Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  session             DebugSession?           @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  parent              DebugStep?              @relation("StepTree", fields: [parentId], references: [id])
+  children            DebugStep[]             @relation("StepTree")
+  captures            Capture[]
+  labEvidence         LabEvidence[]
+  testRecommendations LabTestRecommendation[]
 
   @@index([projectId])
+  @@index([sessionId])
   @@index([parentId])
 }
 
 model AiThread {
   id           String   @id @default(uuid())
   projectId    String
+  sessionId    String?
   mode         String
   messagesJson Json
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  session DebugSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
 
   @@index([projectId, mode])
+  @@index([sessionId])
 }
 
 model DebugReport {
   id             String   @id @default(uuid())
   projectId      String
+  sessionId      String?
   title          String
   version        String   @default("v1.0")
   author         String?
@@ -480,9 +574,149 @@ model DebugReport {
   statsJson      Json?
   createdAt      DateTime @default(now())
 
-  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  session DebugSession? @relation(fields: [sessionId], references: [id], onDelete: SetNull)
 
   @@index([projectId])
+  @@index([sessionId])
+}
+
+model DebugSession {
+  id            String             @id @default(uuid())
+  projectId     String
+  boardId       String?
+  designVersion Int
+  title         String
+  issue         String?
+  goal          String?
+  status        DebugSessionStatus @default(OPEN)
+  ownerId       String?
+  rootCauseCode String?
+  createdAt     DateTime           @default(now())
+  updatedAt     DateTime           @updatedAt
+  closedAt      DateTime?
+
+  project           Project                 @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  board             Board?                  @relation(fields: [boardId], references: [id], onDelete: SetNull)
+  captures          Capture[]
+  debugSteps        DebugStep[]
+  diagnoses         AiDiagnosis[]
+  aiThreads         AiThread[]
+  reports           DebugReport[]
+  evidence          LabEvidence[]
+  suggestionDrafts  LabSuggestionDraft[]
+  hypotheses        LabHypothesis[]
+  goldenComparisons GoldenBoardComparison[]
+
+  @@index([projectId, status])
+  @@index([boardId])
+}
+
+model LabEvidence {
+  id           String       @id @default(uuid())
+  projectId    String
+  sessionId    String
+  kind         EvidenceKind
+  ref          String
+  sourceType   String
+  sourceId     String?
+  componentId  String?
+  pinId        String?
+  netId        String?
+  testPointId  String?
+  debugStepId  String?
+  excerpt      String?
+  dataJson     Json?
+  createdAt    DateTime     @default(now())
+
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  session   DebugSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  component Component?   @relation(fields: [componentId], references: [id], onDelete: SetNull)
+  pin       Pin?         @relation(fields: [pinId], references: [id], onDelete: SetNull)
+  net       Net?         @relation(fields: [netId], references: [id], onDelete: SetNull)
+  testPoint TestPoint?   @relation(fields: [testPointId], references: [id], onDelete: SetNull)
+  debugStep DebugStep?   @relation(fields: [debugStepId], references: [id], onDelete: SetNull)
+
+  @@unique([sessionId, ref])
+  @@index([projectId])
+  @@index([sessionId, createdAt])
+  @@index([componentId])
+  @@index([pinId])
+  @@index([netId])
+  @@index([testPointId])
+  @@index([debugStepId])
+}
+
+model LabSuggestionDraft {
+  id               String                @id @default(uuid())
+  projectId        String
+  sessionId        String
+  kind             SuggestionDraftKind
+  status           SuggestionDraftStatus @default(DRAFT)
+  payloadJson      Json
+  evidenceJson     Json
+  externalObjectId String?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  project Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  session DebugSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, status])
+  @@index([sessionId])
+}
+
+model LabHypothesis {
+  id                  String           @id @default(uuid())
+  sessionId           String
+  statement           String
+  expectedObservation String?
+  confidence          Float
+  status              HypothesisStatus @default(OPEN)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
+
+  session         DebugSession            @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  recommendations LabTestRecommendation[]
+
+  @@index([sessionId, status])
+}
+
+model LabTestRecommendation {
+  id                  String   @id @default(uuid())
+  hypothesisId        String
+  debugStepId         String?
+  title               String
+  expectedObservation String?
+  informationGain     Float
+  safetyCost          Float
+  effortCost          Float
+  score               Float
+  why                 String
+  status              String   @default("PROPOSED")
+  createdAt           DateTime @default(now())
+
+  hypothesis LabHypothesis @relation(fields: [hypothesisId], references: [id], onDelete: Cascade)
+  debugStep  DebugStep?    @relation(fields: [debugStepId], references: [id], onDelete: SetNull)
+
+  @@index([hypothesisId, score])
+}
+
+model GoldenBoardComparison {
+  id            String   @id @default(uuid())
+  projectId     String
+  sessionId     String
+  goldenBoardId String
+  targetBoardId String?
+  resultJson    Json
+  createdAt     DateTime @default(now())
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  session     DebugSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  goldenBoard Board        @relation("GoldenBoard", fields: [goldenBoardId], references: [id], onDelete: Restrict)
+  targetBoard Board?       @relation("TargetBoard", fields: [targetBoardId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
 }
 
 /// 器件知识库（docs/05 §16.3：接真实百万器件库时的接入点）。

@@ -27,7 +27,7 @@
     <label class="agora-mode-label">语音模式</label>
     <select id="voiceModeSelect" class="agora-mode-select" aria-label="语音模式">
       <option value="legacy">普通语音</option>
-      <option value="shengwang">声网实时语音</option>
+      <option value="shengwang">声网实时语音 · A6</option>
     </select>
     <button id="shengwangSessionBtn" class="secondary agora-session-btn" type="button">启动声网对话</button>
     <button id="shengwangInterruptBtn" class="secondary agora-session-btn hidden" type="button">打断当前回答</button>
@@ -50,6 +50,23 @@
   const missing = () => voiceHealth()?.missing || [];
   const configuredTtsVendor = () => voiceHealth()?.tts_vendor || 'generic_http';
   const ttsLabel = (vendor=activeTtsVendor) => vendor === 'minimax' ? 'MiniMax TTS' : 'Gemini TTS';
+  const projectId = () => {
+    try {
+      const q = new URLSearchParams(window.location.search);
+      return (
+        q.get('projectId') ||
+        q.get('project_id') ||
+        window.LABSIGHT_PROJECT_ID ||
+        state.projectId ||
+        state.projectContext?.projectId ||
+        state.projectContext?.id ||
+        localStorage.getItem('labsight-project-id') ||
+        ''
+      ).trim();
+    } catch {
+      return String(window.LABSIGHT_PROJECT_ID || '').trim();
+    }
+  };
 
   const applyUi = () => {
     const realtime = modeSelect.value === 'shengwang';
@@ -66,7 +83,8 @@
     const span = els.voiceBtn?.querySelector('span');
     if (span && !active) span.textContent = realtime ? '启动实时对话' : '语音提问';
     if (realtime && !configured()) setState('声网未配置', 'warn');
-    else if (!active && !starting) setState('声网待机', 'neutral');
+    else if (realtime && !projectId()) setState('缺少 Project Context', 'warn');
+    else if (!active && !starting) setState('声网待机 · A6', 'neutral');
     localStorage.setItem('labsight-voice-mode', modeSelect.value);
   };
 
@@ -101,6 +119,7 @@
         agent_id: session?.agent_id || null,
         channel: session?.channel || null,
         provider: state.provider,
+        project_id: projectId() || null,
         ...extra,
       }),
       keepalive: action === 'stop',
@@ -123,7 +142,7 @@
     if (!session?.agent_id) return;
     try {
       await api('interrupt');
-      setState('已打断 · 正在聆听', 'ok');
+      setState('已打断 · A6 正在聆听', 'ok');
       if (els.recordingState) els.recordingState.textContent = '🎙 已停止当前回答，你可以继续说';
     } catch (e) {
       if (!silent) {
@@ -159,7 +178,7 @@
       setState('声网已结束', 'neutral');
       if (els.recordingState) els.recordingState.textContent = '实时语音对话已结束';
     } else {
-      setState('声网待机', 'neutral');
+      setState('声网待机 · A6', 'neutral');
     }
   };
 
@@ -167,6 +186,7 @@
     if (starting || active) return session;
     activeTtsTarget = 'voice';
     activeTtsVendor = configuredTtsVendor();
+    const pid = projectId();
 
     if (!configured()) {
       const miss = missing();
@@ -176,6 +196,14 @@
       addMessage('assistant', `声网实时语音尚未配置。${msg}`);
       throw new Error(msg);
     }
+    if (!pid) {
+      const msg = '声网实时语音必须绑定 ezPLM projectId，避免不同项目串上下文。';
+      setState('缺少 Project Context', 'warn');
+      if (els.recordingState) els.recordingState.textContent = msg;
+      addMessage('assistant', msg);
+      throw new Error(msg);
+    }
+    localStorage.setItem('labsight-project-id', pid);
 
     starting = true;
     receivedAgentAudio = false;
@@ -190,9 +218,9 @@
       els.autoSpeak.disabled = true;
     }
 
-    setState(`检查 ${ttsLabel()}…`, 'warn');
+    setState(`检查 ${ttsLabel()} / A6…`, 'warn');
     sessionBtn.disabled = true;
-    if (els.recordingState) els.recordingState.textContent = `正在检查声网与 ${ttsLabel()} 配置…`;
+    if (els.recordingState) els.recordingState.textContent = `正在检查声网、${ttsLabel()} 与 A6 Project Context…`;
 
     try {
       const ttsHealth = await checkGenericTtsBridge();
@@ -200,9 +228,11 @@
         throw new Error('Gemini TTS Bridge 未就绪，请确认 GEMINI_API_KEY / Vercel Function');
       }
 
-      setState('正在创建声网智能体…', 'warn');
-      session = await api('start', {tts_target:'gemini'});
+      setState('正在创建声网 A6 会话…', 'warn');
+      session = await api('start', {tts_target:'gemini', project_id:pid});
       if (!session?.agent_id) throw new Error('声网未返回 agent_id');
+      if (session.brain !== 'A6') throw new Error('语音会话没有绑定 A6 单一大脑');
+      if (String(session.project_id || '') !== pid) throw new Error('声网返回的 projectId 与当前项目不一致');
       if (session.agent_status && !['RUNNING', 'STARTING'].includes(session.agent_status)) {
         throw new Error(`声网智能体状态异常：${session.agent_status}`);
       }
@@ -213,17 +243,17 @@
       client.on('user-joined', (user) => {
         agentJoinedRtc = true;
         agentJoinedUid = user.uid;
-        setState('AI 已入 RTC 频道', 'ok');
+        setState('A6 已入 RTC 频道', 'ok');
         if (els.recordingState) {
-          els.recordingState.textContent = `✅ 声网 Agent 已进入 RTC 频道（uid ${user.uid}），正在等待 ${ttsLabel()} 音频…`;
+          els.recordingState.textContent = `✅ A6 已进入 RTC 频道（uid ${user.uid}），正在等待 ${ttsLabel()} 音频…`;
         }
       });
 
       client.on('user-left', (user, reason) => {
         if (String(user.uid) === String(agentJoinedUid)) {
           agentJoinedRtc = false;
-          setState('AI 已离开 RTC', 'warn');
-          if (els.recordingState) els.recordingState.textContent = `⚠️ 声网 Agent 已离开 RTC（${reason || 'unknown'}）`;
+          setState('A6 已离开 RTC', 'warn');
+          if (els.recordingState) els.recordingState.textContent = `⚠️ A6 已离开 RTC（${reason || 'unknown'}）`;
         }
       });
 
@@ -236,10 +266,10 @@
             receivedAgentAudio = true;
             clearWatchdog();
             user.audioTrack?.play();
-            setState('AI 正在回答', 'ok');
+            setState('A6 正在回答', 'ok');
             interruptBtn.classList.remove('hidden');
             if (els.recordingState) {
-              els.recordingState.textContent = `🔊 ${ttsLabel()} 音轨已到达 · 可直接插话，或点击“打断当前回答”`;
+              els.recordingState.textContent = `🔊 A6 → ${ttsLabel()} 音轨已到达 · 可直接插话，或点击“打断当前回答”`;
             }
           }
         } catch (e) {
@@ -251,14 +281,14 @@
 
       client.on('user-unpublished', (_user, mediaType) => {
         if (mediaType === 'audio' && active) {
-          setState('正在聆听', 'ok');
-          if (els.recordingState) els.recordingState.textContent = '🎙 正在聆听';
+          setState('A6 正在聆听', 'ok');
+          if (els.recordingState) els.recordingState.textContent = '🎙 A6 正在聆听';
         }
       });
 
       client.on('connection-state-change', (cur) => {
         if (!active && cur !== 'CONNECTED') return;
-        if (cur === 'CONNECTED') setState('声网已连接', 'ok');
+        if (cur === 'CONNECTED') setState('声网已连接 · A6', 'ok');
         else if (cur === 'RECONNECTING') setState('网络重连中…', 'warn');
         else if (cur === 'DISCONNECTED') setState('声网已断开', 'warn');
       });
@@ -281,20 +311,20 @@
       els.voiceBtn?.classList.add('agora-live');
       const span = els.voiceBtn?.querySelector('span');
       if (span) span.textContent = '结束实时对话';
-      setState('正在验证 AI 音频…', 'warn');
+      setState('正在验证 A6 音频…', 'warn');
       if (els.recordingState) {
         const td = session.turn_detection || {};
-        els.recordingState.textContent = `🎙 声网已连接 · ${ttsLabel()} · SoS ${td.sos_mode || '?'} ${td.sos_ms || '?'}ms / speaking ${td.speaking_sos_ms || '?'}ms`;
+        els.recordingState.textContent = `🎙 A6 已绑定项目 ${pid} · ${ttsLabel()} · SoS ${td.sos_mode || '?'} ${td.sos_ms || '?'}ms / speaking ${td.speaking_sos_ms || '?'}ms`;
       }
 
-      await api('speak', {text:'LabSight 实时语音连接成功。你可以开始说话。'});
+      await api('speak', {text:'LabSight A6 实时语音连接成功。你可以开始说话。'});
 
       audioWatchdog = setTimeout(() => {
         if (!active || receivedAgentAudio) return;
-        setState('AI 音频未到达', 'warn');
+        setState('A6 音频未到达', 'warn');
         const msg = !agentJoinedRtc
-          ? '⚠️ 浏览器已进入 RTC，但没有观察到声网 Agent 加入频道。请检查 Agent RTC token / 任务状态。'
-          : `⚠️ Agent 已进入 RTC，但 ${ttsLabel()} 没有形成音轨。请检查声网任务日志与对应 TTS 配置。`;
+          ? '⚠️ 浏览器已进入 RTC，但没有观察到 A6 Agent 加入频道。请检查 Agent RTC token / 任务状态。'
+          : `⚠️ A6 已进入 RTC，但 ${ttsLabel()} 没有形成音轨。请检查声网任务日志与对应 TTS 配置。`;
         if (els.recordingState) els.recordingState.textContent = msg;
       }, 15000);
 
@@ -339,7 +369,7 @@
     if (session?.agent_id) {
       try {
         navigator.sendBeacon?.('/api/shengwang_session', new Blob([
-          JSON.stringify({action:'stop', agent_id:session.agent_id, channel:session.channel})
+          JSON.stringify({action:'stop', agent_id:session.agent_id, channel:session.channel, project_id:projectId() || null})
         ], {type:'application/json'}));
       } catch {}
     }
@@ -351,6 +381,8 @@
     interrupt,
     get active(){ return active; },
     get session(){ return session; },
+    get projectId(){ return projectId(); },
+    get brain(){ return session?.brain || 'A6'; },
     get ttsTarget(){ return activeTtsTarget; },
     get ttsVendor(){ return activeTtsVendor; },
   };
