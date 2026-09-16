@@ -17,6 +17,18 @@ type EvidenceInput = {
   data?: JsonRecord
 }
 
+type ComparableEvidence = {
+  kind: string
+  ref: string
+  sourceType: string
+  componentId: string | null
+  pinId: string | null
+  netId: string | null
+  testPointId: string | null
+  debugStepId: string | null
+  dataJson: unknown
+}
+
 const evidenceKindForSuggestion = (kind: string) => {
   const map: Record<string, string> = {
     IMAGE: 'image',
@@ -53,6 +65,31 @@ const textRelevance = (text: string, values: Array<string | null | undefined>) =
   const haystack = text.toLowerCase()
   const hits = values.filter((v) => v && haystack.includes(v.toLowerCase())).length
   return Math.min(1, 0.45 + hits * 0.25)
+}
+
+/**
+ * Golden Board evidence must be paired by engineering identity, not by capture/photo UUID.
+ * Board A and Board B never share a source object id, but they do share Net/Pin/TestPoint/Ref semantics.
+ */
+const evidenceComparisonKey = (item: ComparableEvidence) => {
+  if (item.pinId) return `${item.kind}:pin:${item.pinId}`
+  if (item.testPointId) return `${item.kind}:test-point:${item.testPointId}`
+  if (item.netId) return `${item.kind}:net:${item.netId}`
+  if (item.componentId) return `${item.kind}:component:${item.componentId}`
+  if (item.debugStepId) return `${item.kind}:test-step:${item.debugStepId}`
+
+  const data = item.dataJson && typeof item.dataJson === 'object' ? item.dataJson as JsonRecord : {}
+  const targetNet = typeof data.targetNet === 'string' ? data.targetNet : null
+  const targetComponent = typeof data.targetComponent === 'string' ? data.targetComponent : null
+  const side = typeof data.side === 'string' ? data.side : null
+  const channel = typeof data.channel === 'string' ? data.channel : null
+  if (targetNet) return `${item.kind}:net-name:${targetNet}`
+  if (targetComponent) return `${item.kind}:ref:${targetComponent}`
+  if (item.kind === 'IMAGE' && side) return `${item.kind}:board:${side}`
+  if (channel) return `${item.kind}:channel:${channel}`
+
+  // Explicit caller-provided refs remain the final stable key. Source IDs are intentionally ignored.
+  return `${item.kind}:ref:${item.ref}`
 }
 
 @Injectable()
@@ -314,7 +351,7 @@ export class LabSightWorkflowService {
     const [hypotheses, steps] = await Promise.all([
       this.prisma.labHypothesis.findMany({ where: { sessionId, status: 'OPEN' }, orderBy: { confidence: 'desc' } }),
       this.prisma.debugStep.findMany({
-        where: { projectId, parentId: { not: null }, status: { in: ['PENDING', 'IN_PROGRESS'] } },
+        where: { projectId, status: { in: ['PENDING', 'IN_PROGRESS'] } },
         orderBy: [{ order: 'asc' }],
       }),
     ])
@@ -324,7 +361,10 @@ export class LabSightWorkflowService {
     const ranked = hypotheses.flatMap((hypothesis) => {
       const uncertainty = Math.max(0, 1 - Math.abs(hypothesis.confidence - 0.5) * 2)
       return steps.map((step) => {
-        const relevance = textRelevance(`${hypothesis.statement} ${hypothesis.expectedObservation ?? ''}`, [step.targetNet, step.targetComponent, step.title])
+        const relevance = textRelevance(
+          `${hypothesis.statement} ${hypothesis.expectedObservation ?? ''}`,
+          [step.targetNet, step.targetComponent, step.title],
+        )
         const effortCost = Math.min(1, (step.estimateMin ?? 5) / 30)
         const tool = (step.toolHint ?? '').toLowerCase()
         const safetyCost = tool.includes('电源') ? 0.8 : tool.includes('示波器') ? 0.2 : tool.includes('万用表') || tool.includes('目视') ? 0.05 : 0.15
@@ -392,7 +432,7 @@ export class LabSightWorkflowService {
     if (!golden) throw new BadRequestException('goldenBoardId 不是当前项目的 Golden Board')
     const goldenSession = await this.prisma.debugSession.findFirst({
       where: { boardId: golden.id },
-      orderBy: [{ status: 'desc' }, { updatedAt: 'desc' }],
+      orderBy: { updatedAt: 'desc' },
     })
     if (!goldenSession) throw new BadRequestException('Golden Board 还没有 Debug Session / Evidence')
 
@@ -400,13 +440,14 @@ export class LabSightWorkflowService {
       this.prisma.labEvidence.findMany({ where: { sessionId: goldenSession.id } }),
       this.prisma.labEvidence.findMany({ where: { sessionId: input.sessionId } }),
     ])
-    const baselineByRef = new Map(baseline.map((item) => [item.ref, item]))
+    const baselineByKey = new Map(baseline.map((item) => [evidenceComparisonKey(item), item]))
     const diffs = target.flatMap((item) => {
-      const base = baselineByRef.get(item.ref)
+      const comparisonKey = evidenceComparisonKey(item)
+      const base = baselineByKey.get(comparisonKey)
       if (!base) return []
       const baseValue = measurementValue(base.dataJson)
       const targetValue = measurementValue(item.dataJson)
-      let differenceScore = 0
+      let differenceScore: number
       let delta: number | null = null
       if (baseValue !== null && targetValue !== null) {
         delta = targetValue - baseValue
@@ -415,7 +456,9 @@ export class LabSightWorkflowService {
         differenceScore = JSON.stringify(base.dataJson) === JSON.stringify(item.dataJson) ? 0 : 1
       }
       return [{
+        comparisonKey,
         ref: item.ref,
+        baselineRef: base.ref,
         kind: item.kind,
         baselineEvidenceId: base.id,
         targetEvidenceId: item.id,
