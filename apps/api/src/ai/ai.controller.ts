@@ -38,14 +38,7 @@ export class AiController {
     private readonly assembly: AssemblyInspectionService,
   ) {}
 
-  /**
-   * ezPLM / external host discovery endpoint.
-   *
-   * LabSight is deliberately exposed as one callable engineering agent instead of
-   * asking ezPLM to know seven internal endpoints. Actions that can change PLM
-   * state remain suggestion-only; this endpoint only reads context, creates AI
-   * results, or persists evidence in the existing Board Debug Copilot stores.
-   */
+  /** ezPLM / external host discovery endpoint. */
   @Get('labsight-agent/manifest')
   labsightManifest() {
     return {
@@ -54,6 +47,11 @@ export class AiController {
       name: 'LabSight 调试 Agent',
       version: '0.1.0',
       mountPoint: 'project/labsight',
+      web: {
+        projectPathTemplate: '/projects/{projectId}/labsight',
+        embedPathTemplate: '/embed/labsight/{projectId}',
+        hostBridge: 'window.postMessage:labsight:*',
+      },
       modes: ['live_debug', 'pcb_compare'],
       context: [
         'project',
@@ -106,7 +104,6 @@ export class AiController {
       for await (const ev of this.ai.chat({
         projectId: p.projectId,
         message: p.question ?? '请基于当前项目证据给出下一步调试建议。',
-        mode: 'labsight',
       })) {
         if (ev.event === 'narration') {
           const d = ev.data as { delta?: string }
@@ -200,17 +197,12 @@ export class AiController {
     return VisualFindingsSchema.parse(await this.ai.analyzePhoto(photoId, persist ?? true))
   }
 
-  /** P1.5: register KiCad board coordinates onto the physical PCB photo and generate footprint ROIs. */
   @Post('assembly-align')
   async assemblyAlign(@Body() body: unknown) {
     const { photoId, force } = z.object({ photoId: z.string().min(1), force: z.boolean().optional() }).parse(body)
     return this.alignment.align(photoId, force ?? false)
   }
 
-  /**
-   * P1 装配检查独立端点：不改变原 analyze-photo 行为，避免影响已验证测试链路。
-   * P1.5 会先自动配准，再按每个 footprint ROI 判断漏装。
-   */
   @Post('assembly-inspect')
   async assemblyInspect(@Body() body: unknown) {
     const { photoId } = z.object({ photoId: z.string().min(1) }).parse(body)
