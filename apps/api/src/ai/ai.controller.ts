@@ -45,7 +45,7 @@ export class AiController {
       id: 'A6',
       slug: 'labsight-debug',
       name: 'LabSight 调试 Agent',
-      version: '0.2.0',
+      version: '0.3.0',
       mountPoint: 'project/labsight',
       web: {
         projectPathTemplate: '/projects/{projectId}/labsight',
@@ -84,6 +84,25 @@ export class AiController {
         { id: 'golden_board_compare', label: 'Golden Board 对比', available: true, phase: 'P2', surface: 'workflow_api' },
         { id: 'next_best_test', label: 'Hypothesis → Next Best Test', available: true, phase: 'P3', surface: 'workflow_api' },
         { id: 'rtc_a6_voice', label: '声网 RTC → A6 单一大脑', available: true, phase: 'P4', surface: 'rtc' },
+        { id: 's31_edge_camera', label: 'ESP32-S31 Edge Camera · 8MP JPEG / 1 fps', available: true, phase: 'P0', surface: 'camera_bridge' },
+      ],
+      edgeDevices: [
+        {
+          id: 'esp32-s31',
+          label: 'ESP32-S31 Edge Camera',
+          transport: 'localhost_bridge',
+          bridgeDefault: 'http://127.0.0.1:18766',
+          capture: {
+            mode: 'jpeg_snapshot',
+            recommendedResolution: '3840x2160',
+            maxCadenceHz: 1,
+          },
+          firmwareApi: [
+            'GET /api/v1/device',
+            'GET /api/v1/camera/status',
+            'POST /api/v1/camera/capture',
+          ],
+        },
       ],
       policy: {
         writes: 'suggest_only',
