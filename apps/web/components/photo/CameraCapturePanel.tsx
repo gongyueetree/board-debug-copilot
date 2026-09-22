@@ -82,7 +82,6 @@ export function CameraCapturePanel({ projectId }: { projectId: string }) {
     if (s31PreviewUrlRef.current) URL.revokeObjectURL(s31PreviewUrlRef.current)
     s31PreviewUrlRef.current = null
     setS31PreviewUrl('')
-    setS31AutoPreview(false)
     setConnected(false)
     setStatus('摄像头未连接')
     setStatusKind('idle')
