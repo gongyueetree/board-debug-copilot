@@ -67,6 +67,24 @@
     return {x:(w-dw)/2, y:0, w:dw, h};
   };
 
+  const normalizeRotation = value => {
+    const n = ((Number(value) || 0) % 360 + 360) % 360;
+    return [0,90,180,270].includes(n) ? n : 0;
+  };
+
+  const effectiveSide = reg => reg?.side_override || reg?.visible_side || 'unknown';
+
+  const transformUV = (u, v, reg) => {
+    let x = u, y = v;
+    const mirrored = Boolean(reg?.orientation_mirrored ?? reg?.mirrored);
+    const rotation = normalizeRotation(reg?.orientation_rotation ?? reg?.rotation_deg);
+    if (mirrored) x = 1 - x;
+    if (rotation === 90) return {u:1-y, v:x};
+    if (rotation === 180) return {u:1-x, v:1-y};
+    if (rotation === 270) return {u:y, v:1-x};
+    return {u:x, v:y};
+  };
+
   const squareToQuad = pts => {
     const [p0,p1,p2,p3] = pts;
     const dx1 = p1.x - p2.x;
@@ -151,7 +169,7 @@
     for(let i=1;i<quad.length;i++) g.lineTo(quad[i].x,quad[i].y);
     g.closePath(); g.stroke(); g.restore();
 
-    const side = registration.visible_side;
+    const side = effectiveSide(registration);
     const footprints = ctx.footprints.filter(fp => {
       if (fp.excluded) return false;
       if (side === 'front') return !/^B\./i.test(fp.layer || '');
@@ -168,7 +186,8 @@
       const u = (fp.x-b.min_x)/bw;
       const v = (fp.y-b.min_y)/bh;
       if (!Number.isFinite(u) || !Number.isFinite(v) || u < -.05 || u > 1.05 || v < -.05 || v > 1.05) continue;
-      const p = project(u,v);
+      const oriented = transformUV(u,v,registration);
+      const p = project(oriented.u,oriented.v);
       const color = colorFor(fp.reference);
       const text = fp.reference;
       const tw = Math.ceil(g.measureText(text).width);
@@ -199,7 +218,9 @@
       g.fillStyle='#f5fbff'; g.fillText(text,box.x+4,box.y+box.h/2+.2);
     }
 
-    setStatus(`KiCad 位号 ${footprints.length} · 配准 ${Math.round(registration.confidence*100)}% · ${side==='front'?'正面':side==='back'?'背面':'面别未确认'} · 板子移动后请重新配准`, registration.confidence < .75 ? 'warn' : 'ok');
+    const rotation = normalizeRotation(registration.orientation_rotation ?? registration.rotation_deg);
+    const mirrored = Boolean(registration.orientation_mirrored ?? registration.mirrored);
+    setStatus(`KiCad 位号 ${footprints.length} · 配准 ${Math.round(registration.confidence*100)}% · ${side==='front'?'正面':side==='back'?'背面':'面别未确认'} · 方向 ${rotation}°${mirrored?' · 镜像':''} · 板子移动后请重新配准`, registration.confidence < .75 ? 'warn' : 'ok');
   }
 
   const anchorList = ctx => ctx.footprints
@@ -259,11 +280,20 @@
       const area = Math.abs(result.image_quad.reduce((sum,p,i,arr)=>{
         const q=arr[(i+1)%arr.length]; return sum + p.x*q.y - q.x*p.y;
       },0))/2;
-      if (area < .015) throw new Error('识别到的 PCB 区域过小，请让整块板更清楚地出现在画面中');
+      if (area < .005) throw new Error('识别到的 PCB 区域过小，请让整块板更清楚地出现在画面中');
+      const detectedSide = result.visible_side || 'unknown';
+      const detectedRotation = normalizeRotation(result.rotation_deg);
+      const detectedMirror = typeof result.mirrored === 'boolean' ? result.mirrored : detectedSide === 'back';
       registration = {
         image_quad: result.image_quad.map(p=>({x:Number(p.x),y:Number(p.y)})),
         confidence: Number(result.confidence)||0,
-        visible_side: result.visible_side || 'unknown',
+        visible_side: detectedSide,
+        rotation_deg: detectedRotation,
+        mirrored: detectedMirror,
+        orientation_confidence: Number(result.orientation_confidence)||0,
+        orientation_rotation: detectedRotation,
+        orientation_mirrored: detectedMirror,
+        side_override: '',
         model: d.model,
         provider: d.provider,
         evidence: result.evidence || [],
@@ -277,6 +307,9 @@
         window.LabSightSession?.record?.('board_registration', {
           confidence: registration.confidence,
           visible_side: registration.visible_side,
+          rotation_deg: registration.orientation_rotation,
+          mirrored: registration.orientation_mirrored,
+          orientation_confidence: registration.orientation_confidence,
           model: registration.model,
           footprint_count: ctx.footprints.filter(x=>!x.excluded).length,
         });
@@ -339,5 +372,7 @@
     hide: () => {visible=false; canvas.classList.add('hidden'); hideStatus();},
     reset,
     get registration(){return registration;},
+    transformUV: (u,v) => transformUV(u,v,registration),
+    get effectiveSide(){return effectiveSide(registration);},
   };
 })();
