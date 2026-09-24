@@ -491,19 +491,24 @@
     const isActive=active();
     if (!reg||!ctx||!isActive) {
       canvas.classList.add('hidden');badge.classList.add('hidden');detail.classList.add('hidden');
-      originalBtn.classList.add('hidden');rectifiedBtn.classList.add('hidden');refreshBtn.classList.add('hidden');
+      originalBtn.classList.add('hidden');focusBtn.classList.add('hidden');rectifiedBtn.classList.add('hidden');
+      zoom1Btn.classList.add('hidden');zoom2Btn.classList.add('hidden');zoom4Btn.classList.add('hidden');refreshBtn.classList.add('hidden');
       legacyCanvas?.classList.remove('pro-suppressed');
       lastSignature='';
       return;
     }
     legacyCanvas?.classList.add('pro-suppressed');
     canvas.classList.remove('hidden');badge.classList.remove('hidden');
-    originalBtn.classList.remove('hidden');rectifiedBtn.classList.remove('hidden');refreshBtn.classList.toggle('hidden',mode!=='rectified');
-    originalBtn.classList.toggle('active',mode==='original');rectifiedBtn.classList.toggle('active',mode==='rectified');
-    const sig=[mode,viewer.clientWidth,viewer.clientHeight,selectedRef,JSON.stringify(reg.image_quad),snapshot?.width||0,snapshot?.height||0].join('|');
+    originalBtn.classList.remove('hidden');focusBtn.classList.remove('hidden');rectifiedBtn.classList.remove('hidden');
+    const focusMode=mode==='focus';
+    zoom1Btn.classList.toggle('hidden',!focusMode);zoom2Btn.classList.toggle('hidden',!focusMode);zoom4Btn.classList.toggle('hidden',!focusMode);
+    refreshBtn.classList.toggle('hidden',mode==='original');
+    originalBtn.classList.toggle('active',mode==='original');focusBtn.classList.toggle('active',focusMode);rectifiedBtn.classList.toggle('active',mode==='rectified');
+    zoom1Btn.classList.toggle('active',focusMode&&focusZoom===1);zom2Btn.classList.toggle('active',focusMode&&focusZoom===2);zoom4Btn.classList.toggle('active',focusMode&&focusZoom===4);
+    const sig=[mode,focusZoom,viewer.clientWidth,viewer.clientHeight,selectedRef,JSON.stringify(reg.image_quad),snapshot?.width||0,snapshot?.height||0].join('|');
     if (!force&&sig===lastSignature) return;
     lastSignature=sig;
-    if (mode==='rectified') drawRectified(ctx,reg); else drawOriginal(ctx,reg);
+    if (mode==='rectified') drawRectified(ctx,reg); else if (mode==='focus') drawFocus(ctx,reg); else drawOriginal(ctx,reg);
     if (selectedRef) setDetail(ctx.footprints.find(x=>x.reference===selectedRef)); else setDetail(null);
   }
 
@@ -525,13 +530,17 @@
   }
 
   originalBtn.addEventListener('click',()=>{mode='original';lastSignature='';render(true);});
+  focusBtn.addEventListener('click',()=>{mode='focus';copyCurrentFrame();lastSignature='';render(true);});
   rectifiedBtn.addEventListener('click',()=>{mode='rectified';copyCurrentFrame();lastSignature='';render(true);});
-  refreshBtn.addEventListener('click',()=>{copyCurrentFrame();lastSignature='';render(true);});
+  zoom1Btn.addEventListener('click',()=>{focusZoom=1;mode='focus';lastSignature='';render(true);});
+  zoom2Btn.addEventListener('click',()=>{focusZoom=2;mode='focus';lastSignature='';render(true);});
+  zoom4Btn.addEventListener('click',()=>{focusZoom=4;mode='focus';lastSignature='';render(true);});
+  refreshBtn.addEventListener('click',()=>{copyCurrentFrame();lastSignatur='';render(true);});
   canvas.addEventListener('click',selectAt);
 
   refButton.addEventListener('click',()=>setTimeout(()=>{
     if (active() && registration()) {
-      if (!wasActive) {mode='rectified';copyCurrentFrame();selectedRef='';}
+      if (!wasActive) {mode=preferredMode(registration());focusZoom=1;copyCurrentFrame();selectedRef='';}
       render(true);
     } else render(true);
   },30));
@@ -544,7 +553,7 @@
         mode='original';lastSignature='';render(true);
       } else if (returnModeAfterAdjust) {
         mode=returnModeAfterAdjust;returnModeAfterAdjust=null;
-        if (mode==='rectified') copyCurrentFrame();
+        if (mode==='rectified'||mode==='focus') copyCurrentFrame();
         lastSignature='';render(true);
       }
     },20));
@@ -567,7 +576,7 @@
 
   const timer=setInterval(()=>{
     const nowActive=active()&&!!registration();
-    if (nowActive&&!wasActive) {mode='rectified';copyCurrentFrame();lastSignature='';}
+    if (nowActive&&!wasActive) {mode=preferredMode(registration());focusZoom=1;copyCurrentFrame();lastSignature='';}
     if (!nowActive&&wasActive) {snapshot=null;selectedRef='';}
     wasActive=nowActive;
     render(false);
@@ -576,7 +585,8 @@
 
   window.LabSightFootprintPro={
     render:()=>render(true),
-    setMode:m=>{if(m==='original'||m==='rectified'){mode=m;if(m==='rectified')copyCurrentFrame();lastSignature='';render(true);}},
+    setMode:m=>{if(m==='original'||m==='focus'||m==='rectified'){mode=m;if(m!=='original')copyCurrentFrame();lastSignature='';render(true);}},
+    setZoom:z=>{focusZoom=[1,2,4].includes(Number(z))?Number(z):1;mode='focus';copyCurrentFrame();lastSignature='';render(true);},
     refresh:()=>{copyCurrentFrame();lastSignature='';render(true);},
     get mode(){return mode;},
     get selectedRef(){return selectedRef;},
