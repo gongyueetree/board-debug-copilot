@@ -8,7 +8,7 @@ LabSight is no longer treated as a standalone camera demo. The production form i
 ezPLM Project
    ├─ Design / Revision / BOM / Parts / Issues / ECO
    └─ LabSight A6
-        ├─ Camera / reCamera
+        ├─ Camera / reCamera / ESP32-S31 Edge Camera
         ├─ KiCad ↔ physical PCB
         ├─ Measurements / waveforms
         ├─ Evidence Timeline
@@ -64,6 +64,20 @@ It contains two work modes:
    - annotations and visual findings
    - alignment / footprint population inspection
    - A6 chat in the same project context
+
+## ESP32-S31 Edge Camera — P0 integrated
+
+The main LabSight workspace now treats ESP32-S31 as another camera transport, not a separate AI stack.
+
+- UI source: ESP32-S31 Edge Camera
+- local bridge: 127.0.0.1:18766
+- camera payload: JPEG snapshot
+- recommended inspection cadence: up to 1 fps
+- recommended high-resolution modes: 3840x2160 or 3264x2448
+- saved frames continue through the existing BoardPhoto / Vision / Evidence pipeline
+- the 1 fps preview does not automatically persist or invoke the model
+
+Firmware contract and bridge instructions are documented in docs/14-labsight-s31-edge-camera.md.
 
 ## Context rule
 

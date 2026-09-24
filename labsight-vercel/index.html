@@ -12,7 +12,7 @@
   <link rel="stylesheet" href="/realtime-voice.css?v=0.6.1" />
   <link rel="stylesheet" href="/agora-voice-adapter.css?v=0.8.3" />
   <link rel="stylesheet" href="/assembly-inspection.css?v=0.8.3" />
-  <link rel="stylesheet" href="/footprint-overlay.css?v=0.3.0" />
+  <link rel="stylesheet" href="/footprint-overlay.css?v=0.4.0" />
   <link rel="stylesheet" href="/capturebar-layout.css?v=0.1.0" />
   <link rel="stylesheet" href="/pcb-project-viewer-v2.css?v=0.2.0" />
   <link rel="stylesheet" href="/debug-session.css?v=0.17.0" />
@@ -21,7 +21,7 @@
 <header class="topbar">
   <div class="brand">
     <div class="brandmark">LS</div>
-    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.17.7 · Camera Actions / PCB Alignment UI · KiCad PCB 双面预览 · 声网实时语音 · Gemini</div></div>
+    <div><div class="brandname">LabSight</div><div class="tagline">Vision Debugger · EVT0.20 · Camera Actions / PCB Alignment UI · KiCad PCB 双面预览 · 声网 RTC → A6 单一大脑</div></div>
   </div>
   <div class="statusrow">
     <span id="apiStatus" class="pill neutral">AI 检查中…</span>
@@ -48,7 +48,7 @@
 
     <div class="providerbar">
       <div>
-        <label>AI Provider</label>
+        <label>Vision Provider</label>
         <select id="providerSelect">
           <option value="openai">OpenAI</option>
           <option value="gemini">Gemini</option>
@@ -56,7 +56,7 @@
       </div>
       <div class="provider-meta">
         <strong id="providerMeta">检查中…</strong>
-        <span>系统会根据镜头看到的对象自动选择 PCB、信号或仪器分析方式</span>
+        <span>视觉 Provider 负责图像能力；实时语音推理统一进入 A6 项目上下文</span>
       </div>
     </div>
 
@@ -104,7 +104,7 @@
   <div class="panel assistant-panel">
     <div class="assistant-head">
       <div class="avatar">AI</div>
-      <div><h2>LabSight 调试助手</h2><p>画面 + KiCad + 语音问题 → 调试建议</p></div>
+      <div><h2>LabSight A6 调试助手</h2><p>画面 + KiCad + 测量 + Evidence + 语音 → 同一项目大脑</p></div>
       <button id="clearChat" class="iconbtn" title="清空对话">↺</button>
     </div>
 
@@ -115,7 +115,7 @@
     </div>
 
     <div id="chat" class="chat">
-      <div class="message assistant"><div class="bubble">连接摄像头后，LabSight 会自动判断当前面对的是 PCB、示波器还是其它测试仪器，并自动显示对应的分析按钮。</div></div>
+      <div class="message assistant"><div class="bubble">连接摄像头并绑定 ezPLM Project 后，LabSight A6 会基于同一个工程上下文回答文字和实时语音问题。</div></div>
     </div>
 
     <div class="quickprompts">
@@ -136,7 +136,7 @@
 </section>
 </main>
 
-<footer>LabSight EVT0.17.7 · Clean Camera Action Bar + PCB Alignment Tools · KiCad Dual-side Viewer · Rectified Photo Ref Overlay · 声网实时语音</footer>
+<footer>LabSight EVT0.20 · Project-scoped Debug Loop · KiCad / Evidence · 声网 RTC → A6</footer>
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.24.7/AgoraRTC_N-production.js"></script>
 <script src="/session-auth.js?v=0.2.0"></script>
@@ -151,14 +151,14 @@
 <script src="/camera-adapters.js?v=0.10.0"></script>
 <script src="/imx415-uvc-profile.js?v=0.1.0"></script>
 <script src="/auto-scene.js?v=0.2.0"></script>
-<script src="/shengwang-voice-adapter.js?v=0.12.0"></script>
+<script src="/shengwang-voice-adapter.js?v=0.20.0"></script>
 <script src="/shengwang-browser-asr-fallback.js?v=0.1.4"></script>
 <script src="/assembly-inspection.js?v=0.8.4"></script>
 <script src="/pcb-project-viewer-v2.js?v=0.2.1"></script>
 <script src="/pcb-project-viewer-side-helper.js?v=0.1.0"></script>
 <script src="/footprint-overlay.js?v=0.1.0"></script>
 <script src="/footprint-overlay-adjust.js?v=0.1.0"></script>
-<script src="/footprint-overlay-pro.js?v=0.1.0"></script>
+<script src="/footprint-overlay-pro.js?v=0.2.0"></script>
 <script src="/capturebar-layout.js?v=0.1.0"></script>
 <script src="/debug-session.js?v=0.17.0"></script>
 </body>

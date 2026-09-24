@@ -24,24 +24,50 @@
   originalBtn.textContent = '原图标注';
   originalBtn.title = '在当前实拍画面上按 KiCad 坐标精确投影位号；文字标签自动避让，锚点保持准确';
 
+  const focusBtn = document.createElement('button');
+  focusBtn.type = 'button';
+  focusBtn.className = 'secondary big ref-overlay-mode hidden';
+  focusBtn.textContent = '局部放大';
+  focusBtn.title = '保持实拍板卡原始形状，只裁切 PCB 周边并放大；适合板子在整幅画面中占比较小时使用';
+
   const rectifiedBtn = document.createElement('button');
   rectifiedBtn.type = 'button';
   rectifiedBtn.className = 'secondary big ref-overlay-mode hidden';
-  rectifiedBtn.textContent = '校正视图';
-  rectifiedBtn.title = '按 PCB 四角做透视校正，恢复 KiCad 板框比例后再标注位号';
+  rectifiedBtn.textContent = '透视校正';
+  rectifiedBtn.title = '按 PCB 四角做透视校正；只有四角可靠且原始像素足够时才启用';
+
+  const zoom1Btn = document.createElement('button');
+  zoom1Btn.type = 'button';
+  zoom1Btn.className = 'secondary big ref-overlay-mode ref-overlay-zoom hidden';
+  zoom1Btn.textContent = '1×';
+
+  const zoom2Btn = document.createElement('button');
+  zoom2Btn.type = 'button';
+  zoom2Btn.className = 'secondary big ref-overlay-mode ref-overlay-zoom hidden';
+  zoom2Btn.textContent = '2×';
+
+  const zoom4Btn = document.createElement('button');
+  zoom4Btn.type = 'button';
+  zoom4Btn.className = 'secondary big ref-overlay-mode ref-overlay-zoom hidden';
+  zoom4Btn.textContent = '4×';
 
   const refreshBtn = document.createElement('button');
   refreshBtn.type = 'button';
   refreshBtn.className = 'secondary big ref-overlay-mode hidden';
-  refreshBtn.textContent = '↻ 更新校正帧';
-  refreshBtn.title = '重新抓取当前 4K 帧并生成透视校正视图';
+  refreshBtn.textContent = '↻ 更新高清帧';
+  refreshBtn.title = '重新抓取当前原始高清帧，刷新局部放大或透视校正视图';
 
   const insertAfter = adjustButton || document.getElementById('refOverlayRecalibrateBtn') || refButton;
   insertAfter.insertAdjacentElement('afterend', originalBtn);
-  originalBtn.insertAdjacentElement('afterend', rectifiedBtn);
-  rectifiedBtn.insertAdjacentElement('afterend', refreshBtn);
+  originalBtn.insertAdjacentElement('afterend', focusBtn);
+  focusBtn.insertAdjacentElement('afterend', rectifiedBtn);
+  rectifiedBtn.insertAdjacentElement('afterend', zoom1Btn);
+  zoom1Btn.insertAdjacentElement('afterend', zoom2Btn);
+  zoom2Btn.insertAdjacentElement('afterend', zoom4Btn);
+  zoom4Btn.insertAdjacentElement('afterend', refreshBtn);
 
-  let mode = 'rectified';
+  let mode = 'focus';
+  let focusZoom = 1;
   let snapshot = null;
   let selectedRef = '';
   let hitTargets = [];
@@ -139,6 +165,48 @@
   function boundsOf(poly) {
     const xs=poly.map(p=>p.x), ys=poly.map(p=>p.y);
     return {x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)};
+  }
+
+  function polygonArea(poly) {
+    if (!Array.isArray(poly) || poly.length < 3) return 0;
+    let s=0;
+    for (let i=0;i<poly.length;i++) {
+      const a=poly[i],b=poly[(i+1)%poly.length];
+      s += a.x*b.y-b.x*a.y;
+    }
+    return Math.abs(s)/2;
+  }
+
+  function orient(a,b,c) {
+    return (b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x);
+  }
+
+  function segmentsCross(a,b,c,d) {
+    const o1=orient(a,b,c),o2=orient(a,b,d),o3=orient(c,d,a),o4=orient(c,d,b);
+    return o1*o2 < -1e-9 && o3*o4 < -1e-9;
+  }
+
+  function validateQuad(quad) {
+    if (!Array.isArray(quad) || quad.length !== 4 || quad.some(p=>!Number.isFinite(p?.x)||!Number.isFinite(p?.y))) {
+      return {ok:false,reason:'配准四角数据不完整'};
+    }
+    const b=boundsOf(quad);
+    if (b.w < 0.008 || b.h < 0.008) return {ok:false,reason:'配准板框过小'};
+    if (segmentsCross(quad[0],quad[1],quad[2],quad[3]) || segmentsCross(quad[1],quad[2],quad[3],quad[0])) {
+      return {ok:false,reason:'配准四角顺序交叉'};
+    }
+    const area=polygonArea(quad);
+    if (area < 0.00008) return {ok:false,reason:'配准板框面积异常'};
+    const edges=quad.map((p,i)=>Math.hypot(p.x-quad[(i+1)%4].x,p.y-quad[(i+1)%4].y));
+    if (Math.min(...edges) < 0.006) return {ok:false,reason:'配准板框边长异常'};
+    return {ok:true,area,bounds:b};
+  }
+
+  function preferredMode(reg) {
+    const q=(reg?.image_quad || []).map(p=>({x:clamp01(p.x),y:clamp01(p.y)}));
+    const v=validateQuad(q);
+    // PCB 在整幅图中占比小于约 24% 时默认进入局部放大，避免强行透视拉伸。
+    return !v.ok || v.area < 0.24 ? 'focus' : 'original';
   }
 
   function chooseLabel(anchor, boxW, boxH, poly, placed, canvasW, canvasH) {
@@ -257,6 +325,7 @@
     const bw=Math.max(1e-6,b.max_x-b.min_x), bh=Math.max(1e-6,b.max_y-b.min_y);
     const fps=visibleFootprints(ctx,reg);
     const placed=[];
+    let drawn=0;
     hitTargets=[];
     const fontSize=canvasW<700?9:11;
     g.font=`700 ${fontSize}px ui-monospace,SFMono-Regular,Menlo,monospace`;
@@ -266,6 +335,7 @@
       const u=(fp.x-b.min_x)/bw, v=(fp.y-b.min_y)/bh;
       if (!Number.isFinite(u)||!Number.isFinite(v)||u<-.03||u>1.03||v<-.03||v>1.03) continue;
       const p=projector(u,v);
+      if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < -24 || p.y < -24 || p.x > canvasW+24 || p.y > canvasH+24) continue;
       const color=colorFor(fp.reference);
       const text=fp.reference;
       const tw=Math.ceil(g.measureText(text).width), boxW=tw+8, boxH=fontSize+7;
@@ -284,8 +354,9 @@
 
       hitTargets.push({ref:fp.reference,box,anchor:p,fp});
       drawSelection(g,fp,projector,b);
+      drawn++;
     }
-    return fps.length;
+    return drawn;
   }
 
   function setDetail(fp) {
@@ -308,12 +379,91 @@
     const {w,h}=sizeCanvas();
     const g=canvas.getContext('2d');g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,w,h);
     const vr=videoContentRect();
-    const quad=reg.image_quad.map(p=>({x:vr.x+clamp01(p.x)*vr.w,y:vr.y+clamp01(p.y)*vr.h}));
+    const normalizedQuad=reg.image_quad.map(p=>({x:clamp01(p.x),y:clamp01(p.y)}));
+    const valid=validateQuad(normalizedQuad);
+    const quad=normalizedQuad.map(p=>({x:vr.x+p.x*vr.w,y:vr.y+p.y*vr.h}));
+    const displayPoly=valid.ok ? quad : rectCorners(boundsOf(quad));
+    g.save();g.strokeStyle=valid.ok?'rgba(82,224,210,.95)':'rgba(255,176,46,.95)';g.lineWidth=1.6;g.setLineDash(valid.ok?[6,5]:[4,4]);
+    g.beginPath();g.moveTo(displayPoly[0].x,displayPoly[0].y);for(let i=1;i<4;i++)g.lineTo(displayPoly[i].x,displayPoly[i].y);g.closePath();g.stroke();g.restore();
+    if (!valid.ok) {
+      hitTargets=[];
+      badge.textContent=`原图 · ${valid.reason} · 已停止错误位号投影，请重新校准四角`;
+      return;
+    }
     const projector=squareToQuad(quad);
-    g.save();g.strokeStyle='rgba(82,224,210,.95)';g.lineWidth=1.6;g.setLineDash([6,5]);
-    g.beginPath();g.moveTo(quad[0].x,quad[0].y);for(let i=1;i<4;i++)g.lineTo(quad[i].x,quad[i].y);g.closePath();g.stroke();g.restore();
     const count=drawFootprints(g,ctx,reg,projector,quad,w,h);
     badge.textContent=`原图标注 · ${count} 位号 · 锚点=KiCad footprint 中心 · 点击位号查看 pads`;
+  }
+
+  function cropAroundBoard(srcQuad, image, zoom=1, focusPoint=null) {
+    const raw=boundsOf(srcQuad);
+    const pad=Math.max(18,Math.max(raw.w,raw.h)*0.18);
+    let base={
+      x:clamp(raw.x-pad,0,image.width),
+      y:clamp(raw.y-pad,0,image.height),
+      w:Math.min(image.width,raw.w+pad*2),
+      h:Math.min(image.height,raw.h+pad*2),
+    };
+    base.w=Math.min(base.w,image.width-base.x);
+    base.h=Math.min(base.h,image.height-base.y);
+    const z=clamp(Number(zoom)||1,1,4);
+    if (z<=1.001) return base;
+    const cx=clamp(focusPoint?.x ?? (raw.x+raw.w/2),0,image.width);
+    const cy=clamp(focusPoint?.y ?? (raw.y+raw.h/2),0,image.height);
+    const w=Math.max(32,base.w/z),h=Math.max(32,base.h/z);
+    return {
+      x:clamp(cx-w/2,0,Math.max(0,image.width-w)),
+      y:clamp(cy-h/2,0,Math.max(0,image.height-h)),
+      w:Math.min(w,image.width),
+      h:Math.min(h,image.height),
+    };
+  }
+
+  function drawFocus(ctx,reg,notice='') {
+    const {w,h}=sizeCanvas();
+    const g=canvas.getContext('2d');g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,w,h);g.fillStyle='#071018';g.fillRect(0,0,w,h);
+    if (!snapshot && !copyCurrentFrame()) {
+      g.fillStyle='#b9cad8';g.font='14px system-ui';g.fillText('无法抓取当前帧，请确认摄像头已连接。',20,30);return;
+    }
+    g.imageSmoothingEnabled=true;
+    try { g.imageSmoothingQuality='high'; } catch {}
+    const srcQuad=reg.image_quad.map(p=>({x:clamp01(p.x)*snapshot.width,y:clamp01(p.y)*snapshot.height}));
+    const normalizedQuad=reg.image_quad.map(p=>({x:clamp01(p.x),y:clamp01(p.y)}));
+    const valid=validateQuad(normalizedQuad);
+    const srcProject=valid.ok ? squareToQuad(srcQuad) : null;
+    let selectedPoint=null;
+    if (srcProject && selectedRef) {
+      const fp=visibleFootprints(ctx,reg).find(x=>x.reference===selectedRef);
+      const b=ctx.board_bbox;
+      if (fp && b) {
+        selectedPoint=srcProject(
+          (fp.x-b.min_x)/(b.max_x-b.min_x || 1),
+          (fp.y-b.min_y)/(b.max_y-b.min_y || 1)
+        );
+      }
+    }
+    const crop=cropAroundBoard(srcQuad,snapshot,focusZoom,selectedPoint);
+    const dst=fitRect(crop.w/Math.max(1,crop.h),w,h,18);
+    g.drawImage(snapshot,crop.x,crop.y,crop.w,crop.h,dst.x,dst.y,dst.w,dst.h);
+
+    const toDst=p=>({
+      x:dst.x+(p.x-crop.x)/Math.max(1,crop.w)*dst.w,
+      y:dst.y+(p.y-crop.y)/Math.max(1,crop.h)*dst.h,
+    });
+    const boardPoly=(valid.ok ? srcQuad : rectCorners(boundsOf(srcQuad))).map(toDst);
+    g.save();g.strokeStyle=valid.ok?'rgba(82,224,210,.98)':'rgba(255,176,46,.95)';g.lineWidth=2;g.setLineDash(valid.ok?[]:[6,5]);
+    g.beginPath();g.moveTo(boardPoly[0].x,boardPoly[0].y);for(let i=1;i<4;i++)g.lineTo(boardPoly[i].x,boardPoly[i].y);g.closePath();g.stroke();g.restore();
+
+    let count=0;
+    if (valid.ok && srcProject) {
+      const projector=(u,v)=>toDst(srcProject(u,v));
+      count=drawFootprints(g,ctx,reg,projector,boardPoly,w,h);
+    } else {
+      hitTargets=[];
+    }
+    const sourcePct=Math.max(0,Math.min(100,polygonArea(normalizedQuad)*100));
+    const suffix=notice || (!valid.ok ? `${valid.reason}，暂不绘制位号，请重新校准四角` : `保持实拍形状 · ${count} 位号`);
+    badge.textContent=`局部放大 ${focusZoom}× · PCB 原图占比约 ${sourcePct.toFixed(1)}% · ${suffix}`;
   }
 
   function drawRectified(ctx,reg) {
@@ -322,11 +472,26 @@
     if (!snapshot && !copyCurrentFrame()) {
       g.fillStyle='#b9cad8';g.font='14px system-ui';g.fillText('无法抓取当前帧，请确认摄像头已连接。',20,30);return;
     }
+    const normalizedQuad=reg.image_quad.map(p=>({x:clamp01(p.x),y:clamp01(p.y)}));
+    const valid=validateQuad(normalizedQuad);
+    const srcQuad=normalizedQuad.map(p=>({x:p.x*snapshot.width,y:p.y*snapshot.height}));
+    const sb=boundsOf(srcQuad);
+    // 对很小的 PCB 强行做大幅透视拉伸会制造条纹/形变。此时保持原始形状的 ROI 放大更可靠。
+    if (!valid.ok || Math.min(sb.w,sb.h) < 96 || polygonArea(normalizedQuad) < 0.002) {
+      drawFocus(ctx,reg,!valid.ok ? `${valid.reason}，已自动回退到无形变局部放大` : '原始 PCB 像素过少，已自动回退到无形变局部放大');
+      return;
+    }
     const b=ctx.board_bbox;
     const bw=Math.max(1e-6,b.max_x-b.min_x),bh=Math.max(1e-6,b.max_y-b.min_y);
     const aspect=bw/bh;
+    const edge=srcQuad.map((p,i)=>Math.hypot(p.x-srcQuad[(i+1)%4].x,p.y-srcQuad[(i+1)%4].y));
+    const observedAspect=Math.max(1e-6,(edge[0]+edge[2])/Math.max(1e-6,edge[1]+edge[3]));
+    const aspectMismatch=Math.max(observedAspect/aspect,aspect/observedAspect);
+    if (aspectMismatch > 4) {
+      drawFocus(ctx,reg,`四角方向与 KiCad 板框比例不一致（×${aspectMismatch.toFixed(1)}），已回退到无形变局部放大`);
+      return;
+    }
     const rect=fitRect(aspect,w,h,28);
-    const srcQuad=reg.image_quad.map(p=>({x:clamp01(p.x)*snapshot.width,y:clamp01(p.y)*snapshot.height}));
     const srcProject=squareToQuad(srcQuad);
     drawPerspectiveMesh(g,snapshot,srcProject,rect,18);
     g.save();g.strokeStyle='rgba(82,224,210,.98)';g.lineWidth=2;g.strokeRect(rect.x,rect.y,rect.w,rect.h);g.restore();
@@ -341,19 +506,24 @@
     const isActive=active();
     if (!reg||!ctx||!isActive) {
       canvas.classList.add('hidden');badge.classList.add('hidden');detail.classList.add('hidden');
-      originalBtn.classList.add('hidden');rectifiedBtn.classList.add('hidden');refreshBtn.classList.add('hidden');
+      originalBtn.classList.add('hidden');focusBtn.classList.add('hidden');rectifiedBtn.classList.add('hidden');
+      zoom1Btn.classList.add('hidden');zoom2Btn.classList.add('hidden');zoom4Btn.classList.add('hidden');refreshBtn.classList.add('hidden');
       legacyCanvas?.classList.remove('pro-suppressed');
       lastSignature='';
       return;
     }
     legacyCanvas?.classList.add('pro-suppressed');
     canvas.classList.remove('hidden');badge.classList.remove('hidden');
-    originalBtn.classList.remove('hidden');rectifiedBtn.classList.remove('hidden');refreshBtn.classList.toggle('hidden',mode!=='rectified');
-    originalBtn.classList.toggle('active',mode==='original');rectifiedBtn.classList.toggle('active',mode==='rectified');
-    const sig=[mode,viewer.clientWidth,viewer.clientHeight,selectedRef,JSON.stringify(reg.image_quad),snapshot?.width||0,snapshot?.height||0].join('|');
+    originalBtn.classList.remove('hidden');focusBtn.classList.remove('hidden');rectifiedBtn.classList.remove('hidden');
+    const focusMode=mode==='focus';
+    zoom1Btn.classList.toggle('hidden',!focusMode);zoom2Btn.classList.toggle('hidden',!focusMode);zoom4Btn.classList.toggle('hidden',!focusMode);
+    refreshBtn.classList.toggle('hidden',mode==='original');
+    originalBtn.classList.toggle('active',mode==='original');focusBtn.classList.toggle('active',focusMode);rectifiedBtn.classList.toggle('active',mode==='rectified');
+    zoom1Btn.classList.toggle('active',focusMode&&focusZoom===1);zoom2Btn.classList.toggle('active',focusMode&&focusZoom===2);zoom4Btn.classList.toggle('active',focusMode&&focusZoom===4);
+    const sig=[mode,focusZoom,viewer.clientWidth,viewer.clientHeight,selectedRef,JSON.stringify(reg.image_quad),snapshot?.width||0,snapshot?.height||0].join('|');
     if (!force&&sig===lastSignature) return;
     lastSignature=sig;
-    if (mode==='rectified') drawRectified(ctx,reg); else drawOriginal(ctx,reg);
+    if (mode==='rectified') drawRectified(ctx,reg); else if (mode==='focus') drawFocus(ctx,reg); else drawOriginal(ctx,reg);
     if (selectedRef) setDetail(ctx.footprints.find(x=>x.reference===selectedRef)); else setDetail(null);
   }
 
@@ -375,13 +545,24 @@
   }
 
   originalBtn.addEventListener('click',()=>{mode='original';lastSignature='';render(true);});
+  focusBtn.addEventListener('click',()=>{mode='focus';copyCurrentFrame();lastSignature='';render(true);});
   rectifiedBtn.addEventListener('click',()=>{mode='rectified';copyCurrentFrame();lastSignature='';render(true);});
+  zoom1Btn.addEventListener('click',()=>{focusZoom=1;mode='focus';lastSignature='';render(true);});
+  zoom2Btn.addEventListener('click',()=>{focusZoom=2;mode='focus';lastSignature='';render(true);});
+  zoom4Btn.addEventListener('click',()=>{focusZoom=4;mode='focus';lastSignature='';render(true);});
   refreshBtn.addEventListener('click',()=>{copyCurrentFrame();lastSignature='';render(true);});
   canvas.addEventListener('click',selectAt);
+  canvas.addEventListener('wheel',e=>{
+    if (mode!=='focus') return;
+    e.preventDefault();
+    const levels=[1,2,4],idx=levels.indexOf(focusZoom);
+    focusZoom=e.deltaY<0?levels[Math.min(levels.length-1,Math.max(0,idx+1))]:levels[Math.max(0,idx-1)];
+    lastSignature='';render(true);
+  },{passive:false});
 
   refButton.addEventListener('click',()=>setTimeout(()=>{
     if (active() && registration()) {
-      if (!wasActive) {mode='rectified';copyCurrentFrame();selectedRef='';}
+      if (!wasActive) {mode=preferredMode(registration());focusZoom=1;copyCurrentFrame();selectedRef='';}
       render(true);
     } else render(true);
   },30));
@@ -394,7 +575,7 @@
         mode='original';lastSignature='';render(true);
       } else if (returnModeAfterAdjust) {
         mode=returnModeAfterAdjust;returnModeAfterAdjust=null;
-        if (mode==='rectified') copyCurrentFrame();
+        if (mode==='rectified'||mode==='focus') copyCurrentFrame();
         lastSignature='';render(true);
       }
     },20));
@@ -417,7 +598,7 @@
 
   const timer=setInterval(()=>{
     const nowActive=active()&&!!registration();
-    if (nowActive&&!wasActive) {mode='rectified';copyCurrentFrame();lastSignature='';}
+    if (nowActive&&!wasActive) {mode=preferredMode(registration());focusZoom=1;copyCurrentFrame();lastSignature='';}
     if (!nowActive&&wasActive) {snapshot=null;selectedRef='';}
     wasActive=nowActive;
     render(false);
@@ -426,7 +607,8 @@
 
   window.LabSightFootprintPro={
     render:()=>render(true),
-    setMode:m=>{if(m==='original'||m==='rectified'){mode=m;if(m==='rectified')copyCurrentFrame();lastSignature='';render(true);}},
+    setMode:m=>{if(m==='original'||m==='focus'||m==='rectified'){mode=m;if(m!=='original')copyCurrentFrame();lastSignature='';render(true);}},
+    setZoom:z=>{focusZoom=[1,2,4].includes(Number(z))?Number(z):1;mode='focus';copyCurrentFrame();lastSignature='';render(true);},
     refresh:()=>{copyCurrentFrame();lastSignature='';render(true);},
     get mode(){return mode;},
     get selectedRef(){return selectedRef;},

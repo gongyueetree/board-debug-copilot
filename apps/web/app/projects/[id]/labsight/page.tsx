@@ -1,4 +1,5 @@
 import { LabSightAgentWorkspace } from '@/components/labsight/LabSightAgentWorkspace'
+import { LabSightClosedLoopPanel } from '@/components/labsight/LabSightClosedLoopPanel'
 import { api } from '@/lib/api'
 import { prefetch } from '@/lib/server-fetch'
 
@@ -31,6 +32,15 @@ export default async function LabSightPage({ params }: { params: Promise<{ id: s
           A6 · LabSight Debug Agent · 建议 → 人确认 → 写库
         </div>
       </header>
+
+      <LabSightClosedLoopPanel
+        projectId={id}
+        project={project}
+        design={design}
+        photos={photos}
+        captures={captures}
+        diagnosis={diagnosis}
+      />
 
       <LabSightAgentWorkspace
         projectId={id}
