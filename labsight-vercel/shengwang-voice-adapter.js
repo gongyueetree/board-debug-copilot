@@ -17,6 +17,7 @@
   let audioWatchdog = null;
   let activeTtsTarget = 'voice';
   let activeTtsVendor = 'generic_http';
+  let missingContextNotified = false;
 
   const bar = document.querySelector('.wakebar');
   if (!bar) return;
@@ -53,6 +54,7 @@
   const projectId = () => {
     try {
       const q = new URLSearchParams(window.location.search);
+      const pathMatch = window.location.pathname.match(/\/(?:projects|embed\/labsight)\/([^/?#]+)(?:\/labsight)?(?:\/|$)/i);
       return (
         q.get('projectId') ||
         q.get('project_id') ||
@@ -60,6 +62,7 @@
         state.projectId ||
         state.projectContext?.projectId ||
         state.projectContext?.id ||
+        pathMatch?.[1] ||
         localStorage.getItem('labsight-project-id') ||
         ''
       ).trim();
@@ -82,9 +85,20 @@
     }
     const span = els.voiceBtn?.querySelector('span');
     if (span && !active) span.textContent = realtime ? '启动实时对话' : '语音提问';
-    if (realtime && !configured()) setState('声网未配置', 'warn');
-    else if (realtime && !projectId()) setState('缺少 Project Context', 'warn');
-    else if (!active && !starting) setState('声网待机 · A6', 'neutral');
+    if (realtime && !configured()) {
+      setState('声网未配置', 'warn');
+    } else if (realtime && !projectId()) {
+      // Standalone LabSight has local KiCad/camera context but no ezPLM project id.
+      // Keep text chat and ordinary voice usable instead of trapping the user in a dead-end A6 mode.
+      setState('无项目上下文 · 已回退普通语音', 'neutral');
+      sessionBtn.disabled = true;
+      sessionBtn.textContent = '需 ezPLM 项目';
+      if (span && !active) span.textContent = '语音提问';
+    } else {
+      sessionBtn.disabled = false;
+      sessionBtn.textContent = active ? '结束声网对话' : '启动声网对话';
+      if (!active && !starting) setState('声网待机 · A6', 'neutral');
+    }
     localStorage.setItem('labsight-voice-mode', modeSelect.value);
   };
 
@@ -197,12 +211,16 @@
       throw new Error(msg);
     }
     if (!pid) {
-      const msg = '声网实时语音必须绑定 ezPLM projectId，避免不同项目串上下文。';
-      setState('缺少 Project Context', 'warn');
+      const msg = '当前是独立 LabSight 页面，没有 ezPLM projectId；已保留文字提问和普通语音，声网 A6 仅在项目上下文中启用。';
+      setState('无项目上下文 · 普通语音可用', 'neutral');
       if (els.recordingState) els.recordingState.textContent = msg;
-      addMessage('assistant', msg);
+      if (!missingContextNotified) {
+        addMessage('assistant', msg);
+        missingContextNotified = true;
+      }
       throw new Error(msg);
     }
+    missingContextNotified = false;
     localStorage.setItem('labsight-project-id', pid);
 
     starting = true;
@@ -348,7 +366,16 @@
 
   const toggle = () => active || starting ? stop(true) : start().catch(()=>{});
 
-  sessionBtn.addEventListener('click', toggle);
+  sessionBtn.addEventListener('click', () => {
+    if (modeSelect.value === 'shengwang' && !projectId()) {
+      // Do not emit repeated "missing project context" messages. The normal voice button
+      // continues to use the existing browser ASR -> /api/analyze path in this state.
+      applyUi();
+      if (els.recordingState) els.recordingState.textContent = '当前无 ezPLM 项目上下文；请使用“语音提问”或文字输入。';
+      return;
+    }
+    toggle();
+  });
   interruptBtn.addEventListener('click', () => interrupt(false));
 
   modeSelect.addEventListener('change', async () => {
@@ -358,6 +385,12 @@
 
   els.voiceBtn?.addEventListener('click', (e) => {
     if (modeSelect.value !== 'shengwang') return;
+    // In standalone mode there is no real ezPLM project for A6. Let the original
+    // LabSight voice handler run instead: browser ASR -> current frame -> /api/analyze.
+    if (!projectId()) {
+      setState('本地语音 · 视觉分析', 'neutral');
+      return;
+    }
     e.preventDefault();
     e.stopImmediatePropagation();
     toggle();
@@ -388,6 +421,8 @@
   };
 
   modeSelect.value = localStorage.getItem('labsight-voice-mode') === 'shengwang' ? 'shengwang' : 'legacy';
+  // If the remembered mode is Shengwang but this is the standalone sandbox,
+  // keep the selection visible while gracefully falling back for actual voice input.
   applyUi();
   setTimeout(applyUi, 800);
   setTimeout(applyUi, 2000);
