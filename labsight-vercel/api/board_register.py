@@ -38,6 +38,36 @@ class RegistrationResult(BaseModel):
     evidence: list[str] = Field(default_factory=list)
 
 
+def _orient(a: Point, b: Point, c: Point) -> float:
+    return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+
+
+def _segments_cross(a: Point, b: Point, c: Point, d: Point) -> bool:
+    o1, o2 = _orient(a, b, c), _orient(a, b, d)
+    o3, o4 = _orient(c, d, a), _orient(c, d, b)
+    return o1 * o2 < -1e-9 and o3 * o4 < -1e-9
+
+
+def _validate_quad_geometry(points: list[Point]) -> tuple[bool, str]:
+    if len(points) != 4:
+        return False, "板卡配准必须返回 4 个角点"
+    xs, ys = [p.x for p in points], [p.y for p in points]
+    if max(xs) - min(xs) < 0.008 or max(ys) - min(ys) < 0.008:
+        return False, "板框范围过小"
+    if _segments_cross(points[0], points[1], points[2], points[3]) or _segments_cross(points[1], points[2], points[3], points[0]):
+        return False, "四角顺序发生交叉"
+    area = abs(sum(points[i].x * points[(i + 1) % 4].y - points[(i + 1) % 4].x * points[i].y for i in range(4))) / 2
+    if area < 0.00008:
+        return False, "板框面积异常"
+    edge_lengths = [
+        ((points[i].x - points[(i + 1) % 4].x) ** 2 + (points[i].y - points[(i + 1) % 4].y) ** 2) ** 0.5
+        for i in range(4)
+    ]
+    if min(edge_lengths) < 0.006:
+        return False, "板框边长异常"
+    return True, ""
+
+
 def _split_data_url(data_url: str) -> tuple[str, str]:
     m = re.match(r"^data:([^;]+);base64,(.+)$", data_url, re.DOTALL)
     if not m:
@@ -206,6 +236,14 @@ def board_register(req: BoardRegistrationRequest, request: Request):
 
     if result.matched and len(result.image_quad) != 4:
         raise HTTPException(status_code=502, detail="配准模型未返回 4 个对应角点")
+
+    if result.matched:
+        geometry_ok, geometry_reason = _validate_quad_geometry(result.image_quad)
+        if not geometry_ok:
+            # 不再把自交/退化四边形交给前端做透视拉伸；这正是小板卡出现条纹和怪异形变的主要来源之一。
+            result.matched = False
+            result.confidence = min(result.confidence, 0.35)
+            result.evidence = (result.evidence + [f"几何校验失败：{geometry_reason}，请重新校准四角"])[:4]
 
     return {
         "ok": True,
