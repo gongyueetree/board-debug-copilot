@@ -379,10 +379,18 @@
     const {w,h}=sizeCanvas();
     const g=canvas.getContext('2d');g.setTransform(1,0,0,1,0,0);g.clearRect(0,0,w,h);
     const vr=videoContentRect();
-    const quad=reg.image_quad.map(p=>({x:vr.x+clamp01(p.x)*vr.w,y:vr.y+clamp01(p.y)*vr.h}));
+    const normalizedQuad=reg.image_quad.map(p=>({x:clamp01(p.x),y:clamp01(p.y)}));
+    const valid=validateQuad(normalizedQuad);
+    const quad=normalizedQuad.map(p=>({x:vr.x+p.x*vr.w,y:vr.y+p.y*vr.h}));
+    const displayPoly=valid.ok ? quad : rectCorners(boundsOf(quad));
+    g.save();g.strokeStyle=valid.ok?'rgba(82,224,210,.95)':'rgba(255,176,46,.95)';g.lineWidth=1.6;g.setLineDash(valid.ok?[6,5]:[4,4]);
+    g.beginPath();g.moveTo(displayPoly[0].x,displayPoly[0].y);for(let i=1;i<4;i++)g.lineTo(displayPoly[i].x,displayPoly[i].y);g.closePath();g.stroke();g.restore();
+    if (!valid.ok) {
+      hitTargets=[];
+      badge.textContent=`原图 · ${valid.reason} · 已停止错误位号投影，请重新校准四角`;
+      return;
+    }
     const projector=squareToQuad(quad);
-    g.save();g.strokeStyle='rgba(82,224,210,.95)';g.lineWidth=1.6;g.setLineDash([6,5]);
-    g.beginPath();g.moveTo(quad[0].x,quad[0].y);for(let i=1;i<4;i++)g.lineTo(quad[i].x,quad[i].y);g.closePath();g.stroke();g.restore();
     const count=drawFootprints(g,ctx,reg,projector,quad,w,h);
     badge.textContent=`原图标注 · ${count} 位号 · 锚点=KiCad footprint 中心 · 点击位号查看 pads`;
   }
@@ -442,7 +450,7 @@
       x:dst.x+(p.x-crop.x)/Math.max(1,crop.w)*dst.w,
       y:dst.y+(p.y-crop.y)/Math.max(1,crop.h)*dst.h,
     });
-    const boardPoly=srcQuad.map(toDst);
+    const boardPoly=(valid.ok ? srcQuad : rectCorners(boundsOf(srcQuad))).map(toDst);
     g.save();g.strokeStyle=valid.ok?'rgba(82,224,210,.98)':'rgba(255,176,46,.95)';g.lineWidth=2;g.setLineDash(valid.ok?[]:[6,5]);
     g.beginPath();g.moveTo(boardPoly[0].x,boardPoly[0].y);for(let i=1;i<4;i++)g.lineTo(boardPoly[i].x,boardPoly[i].y);g.closePath();g.stroke();g.restore();
 
@@ -476,6 +484,13 @@
     const b=ctx.board_bbox;
     const bw=Math.max(1e-6,b.max_x-b.min_x),bh=Math.max(1e-6,b.max_y-b.min_y);
     const aspect=bw/bh;
+    const edge=srcQuad.map((p,i)=>Math.hypot(p.x-srcQuad[(i+1)%4].x,p.y-srcQuad[(i+1)%4].y));
+    const observedAspect=Math.max(1e-6,(edge[0]+edge[2])/Math.max(1e-6,edge[1]+edge[3]));
+    const aspectMismatch=Math.max(observedAspect/aspect,aspect/observedAspect);
+    if (aspectMismatch > 4) {
+      drawFocus(ctx,reg,`四角方向与 KiCad 板框比例不一致（×${aspectMismatch.toFixed(1)}），已回退到无形变局部放大`);
+      return;
+    }
     const rect=fitRect(aspect,w,h,28);
     const srcProject=squareToQuad(srcQuad);
     drawPerspectiveMesh(g,snapshot,srcProject,rect,18);
@@ -537,6 +552,13 @@
   zoom4Btn.addEventListener('click',()=>{focusZoom=4;mode='focus';lastSignature='';render(true);});
   refreshBtn.addEventListener('click',()=>{copyCurrentFrame();lastSignature='';render(true);});
   canvas.addEventListener('click',selectAt);
+  canvas.addEventListener('wheel',e=>{
+    if (mode!=='focus') return;
+    e.preventDefault();
+    const levels=[1,2,4],idx=levels.indexOf(focusZoom);
+    focusZoom=e.deltaY<0?levels[Math.min(levels.length-1,Math.max(0,idx+1))]:levels[Math.max(0,idx-1)];
+    lastSignature='';render(true);
+  },{passive:false});
 
   refButton.addEventListener('click',()=>setTimeout(()=>{
     if (active() && registration()) {
