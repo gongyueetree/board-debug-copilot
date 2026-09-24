@@ -52,7 +52,7 @@
     h.className = 'footprint-corner-handle';
     h.dataset.index = String(index);
     h.textContent = name;
-    h.title = ['KiCad 左上角','KiCad 右上角','KiCad 右下角','KiCad 左下角'][index];
+    h.title = ['画面中 PCB 左上角','画面中 PCB 右上角','画面中 PCB 右下角','画面中 PCB 左下角'][index];
     handleLayer.appendChild(h);
     return h;
   });
@@ -60,7 +60,7 @@
 
   const help = document.createElement('div');
   help.className = 'footprint-corner-help hidden';
-  help.textContent = '拖动 1–4 对准 PCB 四角 · 位号会实时跟随 · 完成后再移动板子需重新配准';
+  help.textContent = '拖动 1–4 依次对准画面中的 PCB 左上 / 右上 / 右下 / 左下 · 若位号方向不对，请用“方向 / 镜像 / 面别”修正';
   viewer.appendChild(help);
 
   let editing = false;
@@ -182,6 +182,9 @@
         window.LabSightSession?.record?.('board_registration_manual_adjust', {
           image_quad: reg?.image_quad,
           visible_side: reg?.visible_side,
+          rotation_deg: reg?.orientation_rotation ?? reg?.rotation_deg,
+          mirrored: reg?.orientation_mirrored ?? reg?.mirrored,
+          side_override: reg?.side_override || null,
         });
       } catch {}
     };
