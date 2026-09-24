@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from api._security import rate_limit, require_session
 
-app = FastAPI(title="LabSight KiCad Board Registration", version="0.2.0")
+app = FastAPI(title="LabSight KiCad Board Registration", version="0.3.0")
 
 MAX_IMAGE_CHARS = 3_200_000
 MAX_MAP_CHARS = 1_800_000
@@ -34,7 +34,11 @@ class RegistrationResult(BaseModel):
     matched: bool = False
     confidence: float = Field(default=0, ge=0, le=1)
     visible_side: Literal["front", "back", "unknown"] = "unknown"
+    # image_quad is always IMAGE 0 visual TL/TR/BR/BL, independent of KiCad orientation.
     image_quad: list[Point] = Field(default_factory=list)
+    rotation_deg: Literal[0, 90, 180, 270] = 0
+    mirrored: bool | None = None
+    orientation_confidence: float = Field(default=0, ge=0, le=1)
     evidence: list[str] = Field(default_factory=list)
 
 
@@ -119,16 +123,23 @@ KiCad 板框尺寸/比例提示: {size_hint}
 4. 输出的四点应尽量满足 KiCad board_bbox 的宽高比例在透视校正后恢复为 {size_hint}。
 5. 看不到完整板框或无法确定某个角时，宁可 matched=false，也不要返回包围器件区域的近似大框。
 
-极其重要：image_quad 的四点必须按 IMAGE 1 / KiCad placement map 的方向对应，而不是按照片视觉上的“左上右上”机械排序：
-0 = placement map 左上角 (min_x,min_y) 在真实照片中的位置
-1 = placement map 右上角 (max_x,min_y) 在真实照片中的位置
-2 = placement map 右下角 (max_x,max_y) 在真实照片中的位置
-3 = placement map 左下角 (min_x,max_y) 在真实照片中的位置
+极其重要：为了把“几何四角”和“KiCad 方向”分开，image_quad 必须始终按 IMAGE 0 画面中的视觉顺序返回：
+0 = 画面中 PCB 的左上角
+1 = 画面中 PCB 的右上角
+2 = 画面中 PCB 的右下角
+3 = 画面中 PCB 的左下角
+不要再用 KiCad min_x/min_y 的语义给 image_quad 排序。这样用户手工拖四角时永远只需对准画面四角。
 
-坐标全部是相对 IMAGE 0 宽高的 0~1 归一化坐标。即使 PCB 在照片里旋转、倾斜或透视，也必须保持以上 KiCad 方向对应关系。
-visible_side: 正面器件面为 front，背面为 back，无法判断为 unknown。
-只有能较可靠匹配时 matched=true；看不到完整板框、明显不是同一块板或方向无法判断时 matched=false。
-evidence 最多 4 条，优先描述“板框/安装孔/大连接器”等几何证据。
+另外单独判断 KiCad placement map 应如何变换才能和 IMAGE 0 中的器件布局一致：
+- rotation_deg: 只能是 0 / 90 / 180 / 270，表示在完成镜像后，KiCad placement map 还需顺时针旋转多少度才和实物一致。
+- mirrored: 左右镜像后是否更匹配实物。看到 PCB 背面时通常为 true；正面通常为 false，但仍以连接器、按键、主 IC、晶振等不对称特征为准。
+- orientation_confidence: 0~1，表示方向判断置信度。
+- visible_side: 正面器件面为 front，背面为 back，无法判断为 unknown。
+
+判断 rotation/mirrored 时不要只看板框长宽。优先用不对称的大器件与连接器位置，例如 USB、排针、按键、主 IC、晶振、较大的连接器；这些锚点必须和 IMAGE 1 的 placement map 一致。
+坐标全部是相对 IMAGE 0 宽高的 0~1 归一化坐标。
+只有能较可靠匹配时 matched=true；看不到完整板框、明显不是同一块板时 matched=false。若只是方向置信度偏低，可 matched=true 但 orientation_confidence 较低，让前端提供旋转/镜像手动修正。
+evidence 最多 4 条，优先描述“板框/USB/连接器/按键/主 IC”等方向证据。
 
 严格只返回 JSON，例如：
 {{
@@ -141,7 +152,10 @@ evidence 最多 4 条，优先描述“板框/安装孔/大连接器”等几何
     {{"x":0.79,"y":0.82}},
     {{"x":0.16,"y":0.78}}
   ],
-  "evidence": ["真实 PCB 四条外边界清晰","四个安装孔与 placement map 一致"]
+  "rotation_deg": 90,
+  "mirrored": false,
+  "orientation_confidence": 0.88,
+  "evidence": ["USB-C 位于画面左侧，与 placement map 旋转 90° 后一致","两个大白色连接器位置一致"]
 }}
 """.strip()
 
@@ -190,7 +204,7 @@ def _openai(req: BoardRegistrationRequest) -> tuple[RegistrationResult, str]:
     model = os.getenv("OPENAI_REGISTRATION_MODEL", os.getenv("OPENAI_VISION_MODEL", "gpt-5.6-luna"))
     payload = {
         "model": model,
-        "instructions": "只做 PCB 几何配准。四点必须是 PCB 实际 Edge.Cuts 外边界角，不得使用 ROI 框或器件包围框。严格返回 JSON。",
+        "instructions": "只做 PCB 几何配准和方向判断。image_quad 必须按实拍画面的左上/右上/右下/左下返回；KiCad 方向单独用 rotation_deg/mirrored 表达。不得使用 ROI 框或器件包围框。严格返回 JSON。",
         "input": [{"role": "user", "content": [
             {"type": "input_text", "text": _prompt(req)},
             {"type": "input_image", "image_url": req.board_image, "detail": "high"},
@@ -243,7 +257,8 @@ def board_register(req: BoardRegistrationRequest, request: Request):
             try:
                 bw = max(1e-6, float(req.board_bbox["max_x"]) - float(req.board_bbox["min_x"]))
                 bh = max(1e-6, float(req.board_bbox["max_y"]) - float(req.board_bbox["min_y"]))
-                expected_aspect = bw / bh
+                board_aspect = bw / bh
+                expected_aspect = board_aspect if result.rotation_deg in (0, 180) else 1.0 / board_aspect
                 q = result.image_quad
                 edges = [
                     ((q[i].x - q[(i + 1) % 4].x) ** 2 + (q[i].y - q[(i + 1) % 4].y) ** 2) ** 0.5
@@ -262,6 +277,10 @@ def board_register(req: BoardRegistrationRequest, request: Request):
             result.matched = False
             result.confidence = min(result.confidence, 0.35)
             result.evidence = (result.evidence + [f"几何校验失败：{geometry_reason}，请重新校准四角"])[:4]
+
+    if result.mirrored is None:
+        # Back-side viewing reverses handedness relative to KiCad's front-side XY coordinates.
+        result.mirrored = result.visible_side == "back"
 
     return {
         "ok": True,
