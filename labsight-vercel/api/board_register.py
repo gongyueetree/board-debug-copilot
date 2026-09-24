@@ -239,8 +239,26 @@ def board_register(req: BoardRegistrationRequest, request: Request):
 
     if result.matched:
         geometry_ok, geometry_reason = _validate_quad_geometry(result.image_quad)
+        if geometry_ok:
+            try:
+                bw = max(1e-6, float(req.board_bbox["max_x"]) - float(req.board_bbox["min_x"]))
+                bh = max(1e-6, float(req.board_bbox["max_y"]) - float(req.board_bbox["min_y"]))
+                expected_aspect = bw / bh
+                q = result.image_quad
+                edges = [
+                    ((q[i].x - q[(i + 1) % 4].x) ** 2 + (q[i].y - q[(i + 1) % 4].y) ** 2) ** 0.5
+                    for i in range(4)
+                ]
+                observed_aspect = max(1e-6, (edges[0] + edges[2]) / max(1e-6, edges[1] + edges[3]))
+                mismatch = max(observed_aspect / expected_aspect, expected_aspect / observed_aspect)
+                if mismatch > 4:
+                    geometry_ok = False
+                    geometry_reason = f"四角方向与 KiCad 板框比例不一致（×{mismatch:.1f}）"
+            except Exception:
+                pass
+
         if not geometry_ok:
-            # 不再把自交/退化四边形交给前端做透视拉伸；这正是小板卡出现条纹和怪异形变的主要来源之一。
+            # 不再把自交/退化/方向明显错误的四边形交给前端做透视拉伸。
             result.matched = False
             result.confidence = min(result.confidence, 0.35)
             result.evidence = (result.evidence + [f"几何校验失败：{geometry_reason}，请重新校准四角"])[:4]
