@@ -36,6 +36,30 @@
   rectifiedBtn.textContent = '透视校正';
   rectifiedBtn.title = '按 PCB 四角做透视校正；只有四角可靠且原始像素足够时才启用';
 
+  const rotateBtn = document.createElement('button');
+  rotateBtn.type = 'button';
+  rotateBtn.className = 'secondary big ref-overlay-mode ref-overlay-orientation hidden';
+  rotateBtn.textContent = '方向 0°';
+  rotateBtn.title = '按 0° → 90° → 180° → 270° 顺时针切换 KiCad 器件坐标方向';
+
+  const mirrorBtn = document.createElement('button');
+  mirrorBtn.type = 'button';
+  mirrorBtn.className = 'secondary big ref-overlay-mode ref-overlay-orientation hidden';
+  mirrorBtn.textContent = '镜像 OFF';
+  mirrorBtn.title = '切换左右镜像；查看 PCB 背面时通常需要镜像';
+
+  const sideBtn = document.createElement('button');
+  sideBtn.type = 'button';
+  sideBtn.className = 'secondary big ref-overlay-mode ref-overlay-orientation hidden';
+  sideBtn.textContent = '面别 自动';
+  sideBtn.title = '切换自动 / 正面 / 背面，只显示对应面的 KiCad footprints';
+
+  const autoOrientBtn = document.createElement('button');
+  autoOrientBtn.type = 'button';
+  autoOrientBtn.className = 'secondary big ref-overlay-mode ref-overlay-orientation hidden';
+  autoOrientBtn.textContent = 'AI方向';
+  autoOrientBtn.title = '恢复自动配准模型判断的方向、镜像和面别';
+
   const zoom1Btn = document.createElement('button');
   zoom1Btn.type = 'button';
   zoom1Btn.className = 'secondary big ref-overlay-mode ref-overlay-zoom hidden';
@@ -61,7 +85,11 @@
   insertAfter.insertAdjacentElement('afterend', originalBtn);
   originalBtn.insertAdjacentElement('afterend', focusBtn);
   focusBtn.insertAdjacentElement('afterend', rectifiedBtn);
-  rectifiedBtn.insertAdjacentElement('afterend', zoom1Btn);
+  rectifiedBtn.insertAdjacentElement('afterend', rotateBtn);
+  rotateBtn.insertAdjacentElement('afterend', mirrorBtn);
+  mirrorBtn.insertAdjacentElement('afterend', sideBtn);
+  sideBtn.insertAdjacentElement('afterend', autoOrientBtn);
+  autoOrientBtn.insertAdjacentElement('afterend', zoom1Btn);
   zoom1Btn.insertAdjacentElement('afterend', zoom2Btn);
   zoom2Btn.insertAdjacentElement('afterend', zoom4Btn);
   zoom4Btn.insertAdjacentElement('afterend', refreshBtn);
@@ -80,6 +108,40 @@
   const registration = () => overlay()?.registration || null;
   const clamp = (n, lo, hi) => Math.max(lo, Math.min(hi, n));
   const clamp01 = n => clamp(Number(n) || 0, 0, 1);
+  const normalizeRotation = value => {
+    const n=((Number(value)||0)%360+360)%360;
+    return [0,90,180,270].includes(n)?n:0;
+  };
+  const orientationRotation = reg => normalizeRotation(reg?.orientation_rotation ?? reg?.rotation_deg);
+  const orientationMirrored = reg => Boolean(reg?.orientation_mirrored ?? reg?.mirrored);
+  const effectiveSide = reg => reg?.side_override || reg?.visible_side || 'unknown';
+  const orientUV = (u,v,reg) => {
+    const external=overlay()?.transformUV;
+    if (typeof external==='function') return external(u,v);
+    let x=u,y=v;
+    if (orientationMirrored(reg)) x=1-x;
+    const rotation=orientationRotation(reg);
+    if(rotation===90)return{u:1-y,v:x};
+    if(rotation===180)return{u:1-x,v:1-y};
+    if(rotation===270)return{u:y,v:1-x};
+    return{u:x,v:y};
+  };
+  const orientationText = reg => {
+    const side=effectiveSide(reg);
+    const sideText=side==='front'?'正面':side==='back'?'背面':'面别未确认';
+    return `${sideText} · 方向 ${orientationRotation(reg)}°${orientationMirrored(reg)?' · 镜像':''}`;
+  };
+  function syncOrientationButtons(reg) {
+    if (!reg) return;
+    rotateBtn.textContent=`方向 ${orientationRotation(reg)}°`;
+    mirrorBtn.textContent=`镜像 ${orientationMirrored(reg)?'ON':'OFF'}`;
+    mirrorBtn.classList.toggle('active',orientationMirrored(reg));
+    const side=effectiveSide(reg);
+    sideBtn.textContent=`面别 ${reg.side_override ? (side==='front'?'正面':'背面') : '自动'}`;
+    autoOrientBtn.classList.toggle('active',!reg.side_override &&
+      orientationRotation(reg)===normalizeRotation(reg.rotation_deg) &&
+      orientationMirrored(reg)===Boolean(reg.mirrored));
+  }
 
   const active = () => {
     if (state?.scene !== 'pcb') return false;
@@ -295,7 +357,7 @@
   }
 
   function visibleFootprints(ctx, reg) {
-    const side=reg?.visible_side || 'unknown';
+    const side=effectiveSide(reg);
     return ctx.footprints.filter(fp => {
       if (fp.excluded) return false;
       if (side==='front') return !/^B\./i.test(fp.layer || '');
@@ -309,7 +371,8 @@
     const padPts=(fp.pads || []).map(p => {
       const u=(p.x-board.min_x)/(board.max_x-board.min_x || 1);
       const v=(p.y-board.min_y)/(board.max_y-board.min_y || 1);
-      return projector(u,v);
+      const t=orientUV(u,v,registration());
+      return projector(t.u,t.v);
     }).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y));
     if (padPts.length) {
       const xs=padPts.map(p=>p.x), ys=padPts.map(p=>p.y);
@@ -334,7 +397,8 @@
     for (const fp of fps) {
       const u=(fp.x-b.min_x)/bw, v=(fp.y-b.min_y)/bh;
       if (!Number.isFinite(u)||!Number.isFinite(v)||u<-.03||u>1.03||v<-.03||v>1.03) continue;
-      const p=projector(u,v);
+      const t=orientUV(u,v,reg);
+      const p=projector(t.u,t.v);
       if (!p || !Number.isFinite(p.x) || !Number.isFinite(p.y) || p.x < -24 || p.y < -24 || p.x > canvasW+24 || p.y > canvasH+24) continue;
       const color=colorFor(fp.reference);
       const text=fp.reference;
@@ -392,7 +456,7 @@
     }
     const projector=squareToQuad(quad);
     const count=drawFootprints(g,ctx,reg,projector,quad,w,h);
-    badge.textContent=`原图标注 · ${count} 位号 · 锚点=KiCad footprint 中心 · 点击位号查看 pads`;
+    badge.textContent=`原图标注 · ${count} 位号 · ${orientationText(reg)} · 点击位号查看 pads`;
   }
 
   function cropAroundBoard(srcQuad, image, zoom=1, focusPoint=null) {
@@ -436,10 +500,12 @@
       const fp=visibleFootprints(ctx,reg).find(x=>x.reference===selectedRef);
       const b=ctx.board_bbox;
       if (fp && b) {
-        selectedPoint=srcProject(
+        const t=orientUV(
           (fp.x-b.min_x)/(b.max_x-b.min_x || 1),
-          (fp.y-b.min_y)/(b.max_y-b.min_y || 1)
+          (fp.y-b.min_y)/(b.max_y-b.min_y || 1),
+          reg
         );
+        selectedPoint=srcProject(t.u,t.v);
       }
     }
     const crop=cropAroundBoard(srcQuad,snapshot,focusZoom,selectedPoint);
@@ -462,7 +528,7 @@
       hitTargets=[];
     }
     const sourcePct=Math.max(0,Math.min(100,polygonArea(normalizedQuad)*100));
-    const suffix=notice || (!valid.ok ? `${valid.reason}，暂不绘制位号，请重新校准四角` : `保持实拍形状 · ${count} 位号`);
+    const suffix=notice || (!valid.ok ? `${valid.reason}，暂不绘制位号，请重新校准四角` : `保持实拍形状 · ${count} 位号 · ${orientationText(reg)}`);
     badge.textContent=`局部放大 ${focusZoom}× · PCB 原图占比约 ${sourcePct.toFixed(1)}% · ${suffix}`;
   }
 
@@ -483,7 +549,9 @@
     }
     const b=ctx.board_bbox;
     const bw=Math.max(1e-6,b.max_x-b.min_x),bh=Math.max(1e-6,b.max_y-b.min_y);
-    const aspect=bw/bh;
+    const boardAspect=bw/bh;
+    const rotation=orientationRotation(reg);
+    const aspect=(rotation===90||rotation===270)?1/boardAspect:boardAspect;
     const edge=srcQuad.map((p,i)=>Math.hypot(p.x-srcQuad[(i+1)%4].x,p.y-srcQuad[(i+1)%4].y));
     const observedAspect=Math.max(1e-6,(edge[0]+edge[2])/Math.max(1e-6,edge[1]+edge[3]));
     const aspectMismatch=Math.max(observedAspect/aspect,aspect/observedAspect);
@@ -498,7 +566,7 @@
     const projector=(u,v)=>({x:rect.x+u*rect.w,y:rect.y+v*rect.h});
     const poly=rectCorners(rect);
     const count=drawFootprints(g,ctx,reg,projector,poly,w,h);
-    badge.textContent=`校正视图 · ${count} 位号 · 已恢复 KiCad 板框比例 ${bw.toFixed(1)}×${bh.toFixed(1)} · 点击位号查看 pads`;
+    badge.textContent=`透视校正 · ${count} 位号 · ${orientationText(reg)} · 点击位号查看 pads`;
   }
 
   function render(force=false) {
@@ -507,6 +575,7 @@
     if (!reg||!ctx||!isActive) {
       canvas.classList.add('hidden');badge.classList.add('hidden');detail.classList.add('hidden');
       originalBtn.classList.add('hidden');focusBtn.classList.add('hidden');rectifiedBtn.classList.add('hidden');
+      rotateBtn.classList.add('hidden');mirrorBtn.classList.add('hidden');sideBtn.classList.add('hidden');autoOrientBtn.classList.add('hidden');
       zoom1Btn.classList.add('hidden');zoom2Btn.classList.add('hidden');zoom4Btn.classList.add('hidden');refreshBtn.classList.add('hidden');
       legacyCanvas?.classList.remove('pro-suppressed');
       lastSignature='';
@@ -515,12 +584,14 @@
     legacyCanvas?.classList.add('pro-suppressed');
     canvas.classList.remove('hidden');badge.classList.remove('hidden');
     originalBtn.classList.remove('hidden');focusBtn.classList.remove('hidden');rectifiedBtn.classList.remove('hidden');
+    rotateBtn.classList.remove('hidden');mirrorBtn.classList.remove('hidden');sideBtn.classList.remove('hidden');autoOrientBtn.classList.remove('hidden');
+    syncOrientationButtons(reg);
     const focusMode=mode==='focus';
     zoom1Btn.classList.toggle('hidden',!focusMode);zoom2Btn.classList.toggle('hidden',!focusMode);zoom4Btn.classList.toggle('hidden',!focusMode);
     refreshBtn.classList.toggle('hidden',mode==='original');
     originalBtn.classList.toggle('active',mode==='original');focusBtn.classList.toggle('active',focusMode);rectifiedBtn.classList.toggle('active',mode==='rectified');
     zoom1Btn.classList.toggle('active',focusMode&&focusZoom===1);zoom2Btn.classList.toggle('active',focusMode&&focusZoom===2);zoom4Btn.classList.toggle('active',focusMode&&focusZoom===4);
-    const sig=[mode,focusZoom,viewer.clientWidth,viewer.clientHeight,selectedRef,JSON.stringify(reg.image_quad),snapshot?.width||0,snapshot?.height||0].join('|');
+    const sig=[mode,focusZoom,orientationRotation(reg),orientationMirrored(reg),effectiveSide(reg),viewer.clientWidth,viewer.clientHeight,selectedRef,JSON.stringify(reg.image_quad),snapshot?.width||0,snapshot?.height||0].join('|');
     if (!force&&sig===lastSignature) return;
     lastSignature=sig;
     if (mode==='rectified') drawRectified(ctx,reg); else if (mode==='focus') drawFocus(ctx,reg); else drawOriginal(ctx,reg);
@@ -550,6 +621,31 @@
   zoom1Btn.addEventListener('click',()=>{focusZoom=1;mode='focus';lastSignature='';render(true);});
   zoom2Btn.addEventListener('click',()=>{focusZoom=2;mode='focus';lastSignature='';render(true);});
   zoom4Btn.addEventListener('click',()=>{focusZoom=4;mode='focus';lastSignature='';render(true);});
+  rotateBtn.addEventListener('click',()=>{
+    const reg=registration();if(!reg)return;
+    reg.orientation_rotation=(orientationRotation(reg)+90)%360;
+    reg.manual_orientation=true;lastSignature='';render(true);
+    try{window.LabSightSession?.record?.('board_orientation_adjust',{rotation_deg:reg.orientation_rotation,mirrored:orientationMirrored(reg),side:effectiveSide(reg)});}catch{}
+  });
+  mirrorBtn.addEventListener('click',()=>{
+    const reg=registration();if(!reg)return;
+    reg.orientation_mirrored=!orientationMirrored(reg);
+    reg.manual_orientation=true;lastSignature='';render(true);
+    try{window.LabSightSession?.record?.('board_orientation_adjust',{rotation_deg:orientationRotation(reg),mirrored:reg.orientation_mirrored,side:effectiveSide(reg)});}catch{}
+  });
+  sideBtn.addEventListener('click',()=>{
+    const reg=registration();if(!reg)return;
+    const current=reg.side_override||'auto';
+    reg.side_override=current==='auto'?'front':current==='front'?'back':'';
+    reg.manual_orientation=true;lastSignature='';render(true);
+  });
+  autoOrientBtn.addEventListener('click',()=>{
+    const reg=registration();if(!reg)return;
+    reg.orientation_rotation=normalizeRotation(reg.rotation_deg);
+    reg.orientation_mirrored=Boolean(reg.mirrored);
+    reg.side_override='';
+    reg.manual_orientation=false;lastSignature='';render(true);
+  });
   refreshBtn.addEventListener('click',()=>{copyCurrentFrame();lastSignature='';render(true);});
   canvas.addEventListener('click',selectAt);
   canvas.addEventListener('wheel',e=>{
@@ -610,6 +706,15 @@
     setMode:m=>{if(m==='original'||m==='focus'||m==='rectified'){mode=m;if(m!=='original')copyCurrentFrame();lastSignature='';render(true);}},
     setZoom:z=>{focusZoom=[1,2,4].includes(Number(z))?Number(z):1;mode='focus';copyCurrentFrame();lastSignature='';render(true);},
     refresh:()=>{copyCurrentFrame();lastSignature='';render(true);},
+    setOrientation:({rotation,mirrored,side}={})=>{
+      const reg=registration();if(!reg)return;
+      if(rotation!==undefined)reg.orientation_rotation=normalizeRotation(rotation);
+      if(mirrored!==undefined)reg.orientation_mirrored=Boolean(mirrored);
+      if(side!==undefined)reg.side_override=side==='front'||side==='back'?side:'';
+      reg.manual_orientation=true;lastSignature='';render(true);
+    },
+    resetOrientation:()=>{autoOrientBtn.click();},
+    get orientation(){const reg=registration();return reg?{rotation:orientationRotation(reg),mirrored:orientationMirrored(reg),side:effectiveSide(reg)}:null;},
     get mode(){return mode;},
     get selectedRef(){return selectedRef;},
     get canvas(){return canvas;},
