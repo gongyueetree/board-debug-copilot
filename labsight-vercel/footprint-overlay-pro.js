@@ -54,8 +54,8 @@
   const refreshBtn = document.createElement('button');
   refreshBtn.type = 'button';
   refreshBtn.className = 'secondary big ref-overlay-mode hidden';
-  refreshBtn.textContent = '↻ 更新校正帧';
-  refreshBtn.title = '重新抓取当前 4K 帧并生成透视校正视图';
+  refreshBtn.textContent = '↻ 更新高清帧';
+  refreshBtn.title = '重新抓取当前原始高清帧，刷新局部放大或透视校正视图';
 
   const insertAfter = adjustButton || document.getElementById('refOverlayRecalibrateBtn') || refButton;
   insertAfter.insertAdjacentElement('afterend', originalBtn);
@@ -504,7 +504,7 @@
     zoom1Btn.classList.toggle('hidden',!focusMode);zoom2Btn.classList.toggle('hidden',!focusMode);zoom4Btn.classList.toggle('hidden',!focusMode);
     refreshBtn.classList.toggle('hidden',mode==='original');
     originalBtn.classList.toggle('active',mode==='original');focusBtn.classList.toggle('active',focusMode);rectifiedBtn.classList.toggle('active',mode==='rectified');
-    zoom1Btn.classList.toggle('active',focusMode&&focusZoom===1);zom2Btn.classList.toggle('active',focusMode&&focusZoom===2);zoom4Btn.classList.toggle('active',focusMode&&focusZoom===4);
+    zoom1Btn.classList.toggle('active',focusMode&&focusZoom===1);zoom2Btn.classList.toggle('active',focusMode&&focusZoom===2);zoom4Btn.classList.toggle('active',focusMode&&focusZoom===4);
     const sig=[mode,focusZoom,viewer.clientWidth,viewer.clientHeight,selectedRef,JSON.stringify(reg.image_quad),snapshot?.width||0,snapshot?.height||0].join('|');
     if (!force&&sig===lastSignature) return;
     lastSignature=sig;
@@ -535,7 +535,7 @@
   zoom1Btn.addEventListener('click',()=>{focusZoom=1;mode='focus';lastSignature='';render(true);});
   zoom2Btn.addEventListener('click',()=>{focusZoom=2;mode='focus';lastSignature='';render(true);});
   zoom4Btn.addEventListener('click',()=>{focusZoom=4;mode='focus';lastSignature='';render(true);});
-  refreshBtn.addEventListener('click',()=>{copyCurrentFrame();lastSignatur='';render(true);});
+  refreshBtn.addEventListener('click',()=>{copyCurrentFrame();lastSignature='';render(true);});
   canvas.addEventListener('click',selectAt);
 
   refButton.addEventListener('click',()=>setTimeout(()=>{
