@@ -195,7 +195,7 @@
   const legacyAskAI = askAI;
   askAI = async function(questionOverride=null){
     const q = String(questionOverride ?? els.question.value ?? '').trim();
-    if(state.scene==='pcb' && isAssemblyQuestion(q)) return assemblyInspect(q || '检查哪些器件没有焊接。');
+    if(state.scene==='pcb' && (!window.LabSightDualCamera || window.LabSightDualCamera.shouldUsePcbTools()) && isAssemblyQuestion(q)) return assemblyInspect(q || '检查哪些器件没有焊接。');
     return legacyAskAI(questionOverride);
   };
 
