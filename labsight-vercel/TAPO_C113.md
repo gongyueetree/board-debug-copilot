@@ -11,23 +11,35 @@ Tapo C113 的网络视频通过本机 RTSP → WebRTC Bridge 进入现有的 Lab
 
 ## 2. 在打开网页的电脑上启动 Bridge
 
-需要 Python 3.11 或 3.12。下载或更新本仓库，在终端进入 `labsight-vercel` 文件夹：
+Mac 需要 Python 3.11 或 3.12。默认 `python3` 可能是其它版本，旧虚拟环境也可能绑定了不兼容的版本，导致 PyAV 被迫源码编译。
+
+已安装 Homebrew 时，先运行：
 
 ```bash
-python3 -m venv .venv-recamera
-source .venv-recamera/bin/activate
-python -m pip install -r tools/requirements-recamera-bridge.txt
-python tools/recamera_webrtc_bridge.py --host 127.0.0.1 --port 18765
+brew install python@3.12
 ```
 
-保持终端运行，浏览器打开 `http://127.0.0.1:18765/health` 应显示 `ok: true`。
-Windows 激活环境改为 `.venv-recamera\Scripts\activate`。
-
-Mac 也可以运行已有脚本：
+没有 Homebrew 时，可从 python.org 安装 Python 3.12 的 macOS universal2 安装包。然后在 `labsight-vercel` 目录运行：
 
 ```bash
 zsh tools/run-recamera-bridge.command
 ```
+
+新版脚本自动寻找 Python 3.12/3.11，建立独立的 `.venv-recamera-py3.12`（或 `py3.11`）环境，不复用、不删除旧的 `.venv-recamera`；安装时只接受预编译包，无需安装 FFmpeg、Cython 或 pkg-config 来编译 PyAV。如果找不到包，会显示 Python/系统/架构信息并停止，方便排查镜像或系统兼容问题。
+
+已经下载旧 ZIP、暂不重新下载时，可在当前 `labsight-vercel` 目录直接执行以下等效命令（需要 Homebrew）：
+
+```bash
+brew install python@3.12
+"$(brew --prefix python@3.12)/bin/python3.12" -m venv .venv-tapo312
+.venv-tapo312/bin/python -m pip install --upgrade pip
+.venv-tapo312/bin/python -m pip install --only-binary=:all: -r tools/requirements-recamera-bridge.txt
+.venv-tapo312/bin/python tools/recamera_webrtc_bridge.py --host 127.0.0.1 --port 18765
+```
+
+保持终端运行，浏览器打开 `http://127.0.0.1:18765/health` 应显示 `ok: true`。
+
+Windows 用户使用 `py -3.12 -m venv .venv-recamera`，再使用 `.venv-recamera\Scripts\python -m pip install --only-binary=:all: -r tools/requirements-recamera-bridge.txt` 和 `.venv-recamera\Scripts\python tools/recamera_webrtc_bridge.py`。
 
 名称保留 reCamera 是为了兼容已有安装，同一个程序支持 Tapo。
 如需登录 Mac 后自动启动，可运行 `zsh tools/install-recamera-service.command`。安装后不要移动仓库目录；移动后须重新安装服务。之前装过服务的用户需要更新代码并重新运行安装脚本，让后台加载新版程序。
