@@ -51,24 +51,22 @@
   function refreshDevices() {
     const list = [];
     try {
-      const stream = document.getElementById('video')?.srcObject || null;
-      if (stream) {
-        for (const t of stream.getTracks()) {
+      const cameras = window.LabSightDualCamera?.slots() || [{role:'pcb',video:document.getElementById('video'),stream:document.getElementById('video')?.srcObject}];
+      for (const camera of cameras) {
+        for (const t of camera.stream?.getTracks() || []) {
+          if (t.readyState !== 'live') continue;
           const s = t.getSettings?.() || {};
-          list.push({
-            id: t.id,
-            type: t.kind === 'video' ? 'rgb_camera' : 'microphone',
-            label: t.label || t.kind,
-            connection: 'browser_media',
-            settings: t.kind === 'video' ? {width:s.width,height:s.height,frameRate:s.frameRate} : {sampleRate:s.sampleRate,channelCount:s.channelCount},
-            state: t.readyState,
-          });
+          list.push({id:t.id,type:t.kind==='video'?'rgb_camera':'microphone',role:t.kind==='video'?camera.role:'shared',
+            label:t.label||t.kind,connection:'browser_media',state:t.readyState,
+            settings:t.kind==='video'?{width:camera.video?.videoWidth||s.width,height:camera.video?.videoHeight||s.height,frameRate:s.frameRate}:{sampleRate:s.sampleRate,channelCount:s.channelCount}});
         }
       }
     } catch {}
     session.devices = list;
     save(); render();
   }
+
+  window.addEventListener('labsight:camera-state', refreshDevices);
 
   function parseProjectIdentity(file) {
     if (!file) return;
