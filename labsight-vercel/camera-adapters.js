@@ -1,5 +1,12 @@
 (() => {
-  // LabSight Camera Adapters EVT0.11
+  const primaryEls = els, primaryState = state;
+  function createCameraAdapter(options = {}) {
+  const els = options.elements || primaryEls, state = options.cameraState || primaryState;
+  const secondary = !!options.secondary;
+  const id = name => secondary ? `instrument-${name}` : name;
+  const storage = name => secondary ? `labsight-instrument-${name}` : `labsight-${name}`;
+  const enumerate = options.enumerate || enumerateDevices;
+  // LabSight Camera Adapters EVT0.12
   // UVC/Insta360: 4K + browser-exposed continuous AF.
   // reCamera Pro / Tapo C113: RTSP is converted to WebRTC by the auto-start local service;
   // the browser receives a real MediaStreamTrack (no JPEG polling / canvas bridge).
@@ -48,20 +55,20 @@
   `;
   document.head.appendChild(style);
 
-  const toolbar = document.querySelector('.camera-toolbar');
+  const toolbar = options.toolbar || document.querySelector('.camera-toolbar');
   if (!toolbar || !window.navigator?.mediaDevices) return;
 
   const sourceSelect = document.createElement('select');
-  sourceSelect.id = 'cameraSourceSelect';
+  sourceSelect.id = id('cameraSourceSelect');
   sourceSelect.className = 'camera-source-select';
-  sourceSelect.setAttribute('aria-label', '摄像头类型');
+  sourceSelect.setAttribute('aria-label', secondary ? '仪器摄像头类型' : 'PCB 摄像头类型');
   sourceSelect.add(new Option('USB / UVC 摄像头', 'uvc'));
   sourceSelect.add(new Option('Seeed reCamera Pro（Wi‑Fi）', 'recamera'));
   sourceSelect.add(new Option('Tapo C113（Wi‑Fi / RTSP）', 'tapo'));
   toolbar.insertBefore(sourceSelect, els.cameraSelect);
 
   const disconnectBtn = document.createElement('button');
-  disconnectBtn.id = 'disconnectCamera';
+  disconnectBtn.id = id('disconnectCamera');
   disconnectBtn.className = 'secondary camera-disconnect';
   disconnectBtn.type = 'button';
   disconnectBtn.textContent = '断开连接';
@@ -77,33 +84,35 @@
     <label>Bridge 端口<input id="recameraBridgePort" type="number" min="1" max="65535" placeholder="18765"></label>
     <div class="camera-adapter-help"><span id="recameraBridgeState" class="bridge-state">请先启动本机 WebRTC 服务</span><span id="networkCameraHelp"></span>
     <a href="https://github.com/gongyueetree/board-debug-copilot/blob/main/labsight-vercel/TAPO_C113.md" target="_blank" rel="noopener noreferrer">安装与连接说明</a></div>`;
+  if (secondary) panel.innerHTML = panel.innerHTML.replace(/(id|list)="([^"]+)"/g, (_, attr, name) => `${attr}="${id(name)}"`);
+  const field = name => panel.querySelector(`#${id(name)}`);
   toolbar.insertAdjacentElement('afterend', panel);
 
   const focusPill = document.createElement('span');
   focusPill.className = 'pill neutral camera-focus-pill';
   focusPill.textContent = '自动对焦 · 待检测';
-  document.querySelector('.statusrow')?.appendChild(focusPill);
+  (options.statusRow || document.querySelector('.statusrow'))?.appendChild(focusPill);
 
-  const ipEl = panel.querySelector('#recameraIp');
-  const userEl = panel.querySelector('#recameraUser');
-  const passEl = panel.querySelector('#recameraPassword');
-  const rtspPathEl = panel.querySelector('#recameraRtspPath');
-  const bridgePortEl = panel.querySelector('#recameraBridgePort');
-  const bridgeStateEl = panel.querySelector('#recameraBridgeState');
+  const ipEl = field('recameraIp');
+  const userEl = field('recameraUser');
+  const passEl = field('recameraPassword');
+  const rtspPathEl = field('recameraRtspPath');
+  const bridgePortEl = field('recameraBridgePort');
+  const bridgeStateEl = field('recameraBridgeState');
 
-  bridgePortEl.value = localStorage.getItem('labsight-recamera-bridge-port') || DEFAULT_BRIDGE_PORT;
+  bridgePortEl.value = localStorage.getItem(storage('recamera-bridge-port')) || DEFAULT_BRIDGE_PORT;
   function loadProfile() {
     const p = profile();
     passEl.value = '';
     if (!p) return;
-    const prefix = `labsight-${sourceSelect.value}`;
+    const prefix = storage(sourceSelect.value);
     ipEl.value = localStorage.getItem(`${prefix}-ip`) || p.ip;
     userEl.value = localStorage.getItem(`${prefix}-user`) || p.user;
     rtspPathEl.value = localStorage.getItem(`${prefix}-rtsp-path`) || p.path;
-    panel.querySelector('#networkCameraLabel').textContent = `${p.name} 局域网 IP`;
-    panel.querySelector('#networkUserLabel').textContent = sourceSelect.value === 'tapo' ? '摄像机账户（不是 TP-Link 登录账号）' : '用户名';
-    panel.querySelector('#networkStreamPaths').replaceChildren(...(sourceSelect.value === 'tapo' ? ['/stream1', '/stream2'] : ['/main']).map(v => new Option(v, v)));
-    panel.querySelector('#networkCameraHelp').textContent = sourceSelect.value === 'tapo'
+    field('networkCameraLabel').textContent = `${p.name} 局域网 IP`;
+    field('networkUserLabel').textContent = sourceSelect.value === 'tapo' ? '摄像机账户（不是 TP-Link 登录账号）' : '用户名';
+    field('networkStreamPaths').replaceChildren(...(sourceSelect.value === 'tapo' ? ['/stream1', '/stream2'] : ['/main']).map(v => new Option(v, v)));
+    field('networkCameraHelp').textContent = sourceSelect.value === 'tapo'
       ? 'Tapo App → 设备设置 → 高级设置 → 摄像机账户。/stream1 高清，/stream2 标清。电脑和摄像头须在同一局域网；语音使用本机麦克风。'
       : 'RTSP → 本机 WebRTC → LabSight。先启动本地桥接；只有安装自启动服务后才会随系统登录启动。';
   }
@@ -125,6 +134,7 @@
 
   function setConnectedUi(connected) {
     disconnectBtn.classList.toggle('show', connected);
+    window.dispatchEvent(new CustomEvent('labsight:camera-state', {detail:{role:secondary ? 'instrument' : 'pcb', connected}}));
     if (!connected) {
       els.viewerBadge.style.display = 'none';
       els.viewerEmpty.classList.remove('hidden');
@@ -133,18 +143,18 @@
   }
 
   function disconnectCamera() {
-    stopWakeListening();
-    try { window.cancelLabSightSpeech?.(false); } catch {}
+    if (!secondary) stopWakeListening();
+    if (!secondary) { try { window.cancelLabSightSpeech?.(false); } catch {} }
     stopRemote();
     try { state.stream?.getTracks().forEach(t => t.stop()); } catch {}
     state.stream = null;
     try { els.video.pause(); } catch {}
     els.video.srcObject = null;
     setPill(els.cameraStatus, 'Camera 未连接', 'neutral');
-    setPill(els.micStatus, 'Mic 未连接', 'neutral');
+    if (!secondary) setPill(els.micStatus, 'Mic 未连接', 'neutral');
     setFocusPill('自动对焦 · 待检测', 'neutral');
     setConnectedUi(false);
-    window.LabSightAutoScene?.reset?.();
+    if (!secondary) window.LabSightAutoScene?.reset?.();
   }
 
   function bridgeOrigin() {
@@ -152,7 +162,7 @@
     const port = Number(rawPort);
     if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('Bridge 端口必须是 1–65535 的整数');
     bridgePortEl.value = String(port);
-    localStorage.setItem('labsight-recamera-bridge-port', String(port));
+    localStorage.setItem(storage('recamera-bridge-port'), String(port));
     return `http://127.0.0.1:${port}`;
   }
 
@@ -195,28 +205,43 @@
 
   async function startUvc() {
     disconnectCamera();
-    const videoId = els.cameraSelect.value, audioId = els.micSelect.value;
+    const attempt = connectionId;
+    const videoId = els.cameraSelect.value;
     try {
+      if (window.LabSightDualCamera?.isDeviceInUse(videoId, secondary ? 'instrument' : 'pcb')) throw new Error('这台 USB 摄像头已被另一路使用，请选择另一台设备。');
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: videoId ? {deviceId:{exact:videoId},width:{ideal:3840},height:{ideal:2160},frameRate:{ideal:30,max:30}} : {width:{ideal:3840},height:{ideal:2160},frameRate:{ideal:30,max:30}},
-        audio: audioId ? {deviceId:{exact:audioId},echoCancellation:true,noiseSuppression:true,autoGainControl:true} : true
+        video: {...(videoId ? {deviceId:{exact:videoId}} : {}),width:{ideal:3840},height:{ideal:2160},frameRate:{ideal:30,max:30}}, audio:false
       });
+      if (attempt !== connectionId) { stream.getTracks().forEach(t => t.stop()); return; }
       state.stream = stream;
+      if (!secondary) {
+        try {
+          const audioId = els.micSelect.value;
+          const mic = await navigator.mediaDevices.getUserMedia({video:false,audio:audioId?{deviceId:{exact:audioId},echoCancellation:true,noiseSuppression:true}:true});
+          if (attempt !== connectionId) { mic.getTracks().forEach(t=>t.stop()); return; }
+          mic.getAudioTracks().forEach(t => stream.addTrack(t));
+        } catch { /* Video remains usable without a microphone. */ }
+      }
+      if (attempt !== connectionId) return;
       els.video.srcObject = stream;
       await els.video.play();
-      const vt=stream.getVideoTracks()[0], at=stream.getAudioTracks()[0], s=vt.getSettings?.()||{};
+      if (attempt !== connectionId) return;
+      const vt=stream.getVideoTracks()[0], at=stream.getAudioTracks()[0], settings=vt.getSettings?.()||{};
+      vt.addEventListener('ended', () => { if (attempt === connectionId) disconnectCamera(); });
       await enableAutofocus(vt);
-      setPill(els.cameraStatus, `Camera · ${vt.label || '已连接'} · ${s.width || '?'}×${s.height || '?'}`, 'ok');
-      setPill(els.micStatus, `Mic · ${at?.label || '已连接'}`, 'ok');
+      if (attempt !== connectionId) return;
+      setPill(els.cameraStatus, `Camera · ${vt.label || '已连接'} · ${settings.width || '?'}×${settings.height || '?'}`, 'ok');
+      if (!secondary) setPill(els.micStatus, at ? `Mic · ${at.label || '已连接'}` : 'Mic · 未连接（可文字提问）', at ? 'ok' : 'warn');
       els.viewerEmpty.classList.add('hidden'); els.viewerBadge.style.display='block'; els.viewerBadge.textContent='LIVE'; els.startCamera.textContent='重新连接';
       setConnectedUi(true);
-      await enumerateDevices(false);
-      window.LabSightAutoScene?.detectNow?.();
-      if (els.wakeToggle.checked) startWakeListening();
+      await enumerate(false);
+      if (!secondary) window.LabSightAutoScene?.detectNow?.();
+      if (!secondary && els.wakeToggle.checked && at) startWakeListening();
     } catch (e) {
+      if (attempt !== connectionId) return;
       disconnectCamera();
-      setPill(els.cameraStatus, 'Camera/Mic 连接失败', 'warn');
-      alert(`连接失败：${e.message}\n\n请允许摄像头和麦克风权限。`);
+      setPill(els.cameraStatus, 'Camera 连接失败', 'warn');
+      alert(`连接失败：${e.message}`);
     }
   }
 
@@ -249,9 +274,9 @@
     let bridge;
     try { bridge = bridgeOrigin(); } catch (error) { alert(error.message); return; }
     rtspPathEl.value = rtspPath;
-    localStorage.setItem(`labsight-${source}-ip`, ip);
-    localStorage.setItem(`labsight-${source}-user`, username);
-    localStorage.setItem(`labsight-${source}-rtsp-path`, rtspPath);
+    localStorage.setItem(`${storage(source)}-ip`, ip);
+    localStorage.setItem(`${storage(source)}-user`, username);
+    localStorage.setItem(`${storage(source)}-rtsp-path`, rtspPath);
     setPill(els.cameraStatus, `${p.name} · 正在连接…`, 'neutral');
     setFocusPill(`${p.name} · ${p.focus}`, 'neutral');
     // Allow cancellation even while waiting for the first frame.
@@ -261,6 +286,7 @@
       if (!current()) return;
       let audioTracks = [];
       try {
+        if (secondary) throw new Error("shared microphone");
         const audioId = els.micSelect.value;
         const mic = await navigator.mediaDevices.getUserMedia({video:false,audio:audioId?{deviceId:{exact:audioId},echoCancellation:true,noiseSuppression:true,autoGainControl:true}:true});
         if (!current()) { mic.getTracks().forEach(t => t.stop()); return; }
@@ -312,14 +338,14 @@
         throw new Error(`没有收到可显示的视频。检查局域网、防火墙和隐私模式；Tapo 可尝试 /stream2，并关闭其它正在播放摄像头的应用。`);
       }
       setPill(els.cameraStatus, `${p.name} · ${els.video.videoWidth}×${els.video.videoHeight} · WebRTC`, 'ok');
-      setPill(els.micStatus, audioTracks.length ? `Mic · ${audioTracks[0].label || '本机麦克风'}` : 'Mic · 未连接（可文字提问）', audioTracks.length?'ok':'warn');
+      if (!secondary) setPill(els.micStatus, audioTracks.length ? `Mic · ${audioTracks[0].label || '本机麦克风'}` : 'Mic · 未连接（可文字提问）', audioTracks.length?'ok':'warn');
       els.viewerEmpty.classList.add('hidden');
       els.viewerBadge.style.display='block';
       els.viewerBadge.textContent=`${p.name} LIVE`;
       els.startCamera.textContent='重新连接';
       setConnectedUi(true);
-      window.LabSightAutoScene?.detectNow?.();
-      if (els.wakeToggle.checked && audioTracks.length) startWakeListening();
+      if (!secondary) window.LabSightAutoScene?.detectNow?.();
+      if (!secondary && els.wakeToggle.checked && audioTracks.length) startWakeListening();
     } catch (e) {
       if (!current()) return;
       disconnectCamera();
@@ -331,6 +357,7 @@
   sourceSelect.addEventListener('change', () => {
     disconnectCamera();
     const remote = !!profile();
+    localStorage.setItem(storage('camera-source'), sourceSelect.value);
     loadProfile();
     panel.classList.toggle('show', remote);
     els.cameraSelect.disabled = remote;
@@ -351,9 +378,17 @@
 
   window.addEventListener('pagehide', stopRemote);
 
-  window.LabSightCameraAdapters = {
-    enableAutofocus, stopRemote, disconnectCamera, checkBridge,
+  if (secondary) {
+    sourceSelect.value = localStorage.getItem(storage('camera-source')) || 'tapo';
+    if (!sourceSelect.value) sourceSelect.value = 'tapo';
+    sourceSelect.dispatchEvent(new Event('change'));
+  }
+  return {
+    enableAutofocus, stopRemote, disconnectCamera, checkBridge, sourceSelect,
     get source(){ return sourceSelect.value; },
     get peerConnection(){ return remotePc; }
   };
+  }
+  window.LabSightCreateCameraAdapter = createCameraAdapter;
+  window.LabSightCameraAdapters = createCameraAdapter();
 })();
