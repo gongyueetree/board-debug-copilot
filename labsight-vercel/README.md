@@ -60,6 +60,10 @@ GEMINI_AUDIO_MODEL=gemini-2.5-flash
 - 延迟
 - 成本
 
+## Tapo C113（Wi-Fi）
+
+已增加独立的 Tapo C113 摄像头选项，复用本机 RTSP → WebRTC Bridge，默认 `/stream1`，可切换 `/stream2`。详细配置、Mac 启动命令和故障排查见 [TAPO_C113.md](TAPO_C113.md)。需要在 Tapo App 创建专用摄像机账户。
+
 ## reCamera Pro 本地 Bridge
 
 浏览器不能直接读取 RTSP。选择 `Seeed reCamera Pro（Wi‑Fi）` 后，页面通过仅监听本机的 RTSP→WebRTC Bridge 获取视频。
