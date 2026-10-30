@@ -3,9 +3,14 @@
   // The camera already works through the existing generic UVC adapter; this file
   // adds a product profile, capability readout, and standard UVC zoom/focus controls
   // when the browser exposes those controls through MediaTrackCapabilities.
-  const sourceSelect = document.getElementById('cameraSourceSelect');
-  const cameraSelect = document.getElementById('cameraSelect');
-  const toolbar = document.querySelector('.camera-toolbar');
+  function createProfile(options = {}) {
+  const sourceSelect = options.sourceSelect || document.getElementById('cameraSourceSelect');
+  const cameraSelect = options.cameraSelect || document.getElementById('cameraSelect');
+  const toolbar = options.toolbar || document.querySelector('.camera-toolbar');
+  const cameraState = options.cameraState || state;
+  const startButton = options.startButton || document.getElementById('startCamera');
+  const refreshButton = options.refreshButton || document.getElementById('refreshDevices');
+  const id = name => options.secondary ? `instrument-${name}` : name;
   if (!sourceSelect || !cameraSelect || !toolbar) return;
 
   if (![...sourceSelect.options].some(o => o.value === 'imx415')) {
@@ -13,7 +18,7 @@
   }
 
   const panel = document.createElement('div');
-  panel.id = 'imx415Panel';
+  panel.id = id('imx415Panel');
   panel.className = 'camera-adapter-panel';
   panel.innerHTML = `
     <div class="camera-adapter-help">
@@ -29,20 +34,19 @@
       <span id="imx415FocusValue"></span>
     </label>`;
 
-  const recameraPanel = document.querySelector('.camera-adapter-panel');
-  if (recameraPanel?.parentElement) recameraPanel.insertAdjacentElement('afterend', panel);
-  else toolbar.insertAdjacentElement('afterend', panel);
+  if(options.secondary) panel.innerHTML=panel.innerHTML.replace(/id="([^"]+)"/g,(_,name)=>`id="${id(name)}"`);
+  toolbar.insertAdjacentElement('afterend', panel);
 
-  const stateEl = panel.querySelector('#imx415State');
-  const zoomWrap = panel.querySelector('#imx415ZoomWrap');
-  const zoomEl = panel.querySelector('#imx415Zoom');
-  const zoomValue = panel.querySelector('#imx415ZoomValue');
-  const focusWrap = panel.querySelector('#imx415FocusWrap');
-  const focusEl = panel.querySelector('#imx415Focus');
-  const focusValue = panel.querySelector('#imx415FocusValue');
+  const stateEl = panel.querySelector(`#${id('imx415State')}`);
+  const zoomWrap = panel.querySelector(`#${id('imx415ZoomWrap')}`);
+  const zoomEl = panel.querySelector(`#${id('imx415Zoom')}`);
+  const zoomValue = panel.querySelector(`#${id('imx415ZoomValue')}`);
+  const focusWrap = panel.querySelector(`#${id('imx415FocusWrap')}`);
+  const focusEl = panel.querySelector(`#${id('imx415Focus')}`);
+  const focusValue = panel.querySelector(`#${id('imx415FocusValue')}`);
 
   function selected() { return sourceSelect.value === 'imx415'; }
-  function currentVideoTrack() { return state?.stream?.getVideoTracks?.()[0] || null; }
+  function currentVideoTrack() { return cameraState?.stream?.getVideoTracks?.()[0] || null; }
   function rangeFromCapability(input, cap, current, valueEl) {
     if (!cap || !Number.isFinite(cap.min) || !Number.isFinite(cap.max)) return false;
     input.min = String(cap.min);
@@ -104,15 +108,15 @@
     panel.classList.toggle('show', on);
     if (on) {
       // Keep the normal UVC path: camera-adapters treats every non-reCamera source as UVC.
-      document.getElementById('startCamera').textContent = '连接 IMX415 8MP';
+      startButton.textContent = '连接 IMX415 8MP';
       setTimeout(refreshCapabilities, 0);
     }
   });
 
   // After the existing UVC adapter establishes a stream, inspect the negotiated mode.
-  const video = document.getElementById('video');
+  const video = options.video || document.getElementById('video');
   video?.addEventListener('loadedmetadata', () => setTimeout(refreshCapabilities, 80));
-  document.getElementById('startCamera')?.addEventListener('click', () => {
+  startButton?.addEventListener('click', () => {
     if (selected()) setTimeout(refreshCapabilities, 1200);
   });
 
@@ -123,7 +127,11 @@
     if (option && selected()) cameraSelect.value = option.value;
   }
   cameraSelect.addEventListener('change', refreshCapabilities);
-  document.getElementById('refreshDevices')?.addEventListener('click', () => setTimeout(hintKnownCamera, 500));
+  refreshButton?.addEventListener('click', () => setTimeout(hintKnownCamera, 500));
 
-  window.LabSightIMX415 = { refresh:refreshCapabilities };
+  void refreshCapabilities();
+  return { refresh:refreshCapabilities };
+  }
+  window.LabSightCreateIMX415Profile = createProfile;
+  window.LabSightIMX415 = createProfile();
 })();

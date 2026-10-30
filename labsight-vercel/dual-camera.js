@@ -18,16 +18,16 @@
   const grid = document.createElement('div');
   grid.className = 'dual-camera-grid';
   grid.innerHTML = `<section class="camera-slot" id="pcbCameraSlot" aria-label="PCB 摄像头">
-    <div class="camera-slot-head"><strong>① PCB 摄像头</strong><span>USB / UVC · 保留位号叠加</span></div>
-    <details class="camera-slot-settings" open><summary>PCB 连接设置</summary></details>
+    <div class="camera-slot-head"><strong>① 用于 PCB</strong><span>选择拍摄 PCB 的设备</span></div>
+    <div class="camera-slot-settings"></div><div class="instrument-status" id="pcbCameraStatusRow"></div>
     <div class="camera-slot-actions"><button id="capturePcbFrame" class="secondary" type="button">抓取 PCB</button><button id="fullscreenPcb" class="secondary" type="button">放大画面</button></div>
     </section>
     <section class="camera-slot" id="instrumentCameraSlot" aria-label="仪器摄像头">
-    <div class="camera-slot-head"><strong>② 仪器摄像头</strong><span>Tapo C113 / USB</span></div>
-    <details class="camera-slot-settings" open><summary>仪器连接设置</summary>
+    <div class="camera-slot-head"><strong>② 用于仪器</strong><span>选择拍摄仪器的设备</span></div>
+    <div class="camera-slot-settings">
       <div class="camera-toolbar" id="instrumentToolbar"><select id="instrumentCameraSelect" aria-label="仪器 USB 摄像头"></select>
       <button id="instrumentRefreshDevices" class="secondary" type="button">刷新设备</button><button id="instrumentStartCamera" class="primary" type="button">连接摄像头</button></div>
-    </details>
+    </div>
     <div class="instrument-status"><span id="instrumentCameraStatus" class="pill neutral">Camera 未连接</span></div>
     <div class="instrument-viewer"><video id="instrumentVideo" autoplay playsinline muted></video>
       <div class="viewer-badge" id="instrumentViewerBadge">LIVE</div><div class="viewer-empty" id="instrumentViewerEmpty"><strong>连接仪器摄像头</strong><span>对准示波器、电源或万用表屏幕</span></div></div>
@@ -35,8 +35,16 @@
     </section>`;
   toolbar.before(controls, grid);
   const pcbSlot = grid.querySelector('#pcbCameraSlot');
-  settingsNodes.forEach(node => pcbSlot.querySelector('details').appendChild(node));
+  settingsNodes.forEach(node => pcbSlot.querySelector('.camera-slot-settings').appendChild(node));
   pcbSlot.insertBefore(viewer, pcbSlot.querySelector('.camera-slot-actions'));
+  const pcbStatus=grid.querySelector('#pcbCameraStatusRow');
+  pcbStatus.append(els.cameraStatus);
+  const primaryFocus=document.querySelector('.statusrow .camera-focus-pill');
+  if(primaryFocus)pcbStatus.append(primaryFocus);
+  const audioSettings=document.createElement('details');audioSettings.className='dual-audio-settings';
+  audioSettings.innerHTML='<summary>麦克风 / 扬声器</summary><div></div>';
+  [els.micSelect,document.getElementById('audioOutputSelect')].filter(Boolean).forEach(node=>audioSettings.querySelector('div').appendChild(node));
+  controls.appendChild(audioSettings);
   const secondaryVideo = grid.querySelector('#instrumentVideo');
   const cameraSelect = grid.querySelector('#instrumentCameraSelect');
   const analysisTarget = controls.querySelector('#cameraAnalysisTarget');
@@ -55,11 +63,14 @@
   }
   const instrument = window.LabSightCreateCameraAdapter({
     secondary:true, cameraState:instrumentState, toolbar:grid.querySelector('#instrumentToolbar'),
-    statusRow:grid.querySelector('.instrument-status'), enumerate:enumerateInstrument,
+    statusRow:grid.querySelector('#instrumentCameraSlot .instrument-status'), enumerate:enumerateInstrument,
     elements:{...els,video:secondaryVideo,cameraSelect,micStatus:null,
       startCamera:grid.querySelector('#instrumentStartCamera'),refreshDevices:grid.querySelector('#instrumentRefreshDevices'),
       cameraStatus:grid.querySelector('#instrumentCameraStatus'),viewerEmpty:grid.querySelector('#instrumentViewerEmpty'),viewerBadge:grid.querySelector('#instrumentViewerBadge')}
   });
+  window.LabSightCreateIMX415Profile?.({secondary:true,sourceSelect:instrument.sourceSelect,cameraSelect,
+    toolbar:grid.querySelector('#instrumentToolbar'),cameraState:instrumentState,video:secondaryVideo,
+    startButton:grid.querySelector('#instrumentStartCamera'),refreshButton:grid.querySelector('#instrumentRefreshDevices')});
   grid.querySelector('#instrumentRefreshDevices').addEventListener('click',enumerateInstrument);
   navigator.mediaDevices?.addEventListener('devicechange',enumerateInstrument);
   els.video.addEventListener('loadedmetadata',enumerateInstrument);

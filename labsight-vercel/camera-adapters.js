@@ -6,10 +6,7 @@
   const id = name => secondary ? `instrument-${name}` : name;
   const storage = name => secondary ? `labsight-instrument-${name}` : `labsight-${name}`;
   const enumerate = options.enumerate || enumerateDevices;
-  // LabSight Camera Adapters EVT0.12
-  // UVC/Insta360: 4K + browser-exposed continuous AF.
-  // reCamera Pro / Tapo C113: RTSP is converted to WebRTC by the auto-start local service;
-  // the browser receives a real MediaStreamTrack (no JPEG polling / canvas bridge).
+  // LabSight Camera Adapters EVT0.13
 
   const DEFAULT_BRIDGE_PORT = 18765;
   const profiles = {
@@ -63,6 +60,7 @@
   sourceSelect.className = 'camera-source-select';
   sourceSelect.setAttribute('aria-label', secondary ? '仪器摄像头类型' : 'PCB 摄像头类型');
   sourceSelect.add(new Option('USB / UVC 摄像头', 'uvc'));
+  sourceSelect.add(new Option('IMX415 8MP UVC（变焦/自动对焦）', 'imx415'));
   sourceSelect.add(new Option('Seeed reCamera Pro（Wi‑Fi）', 'recamera'));
   sourceSelect.add(new Option('Tapo C113（Wi‑Fi / RTSP）', 'tapo'));
   toolbar.insertBefore(sourceSelect, els.cameraSelect);
@@ -354,21 +352,25 @@
     }
   }
 
+  const connectionDialog = window.LabSightCameraDialog({panel,id,button:els.startCamera,profile,
+    connect:startNetworkCamera,disconnect:disconnectCamera,checkBridge,
+    connected:()=>!!state.stream?.getVideoTracks().some(t=>t.readyState==='live')&&els.video.readyState>=2});
   sourceSelect.addEventListener('change', () => {
     disconnectCamera();
     const remote = !!profile();
     localStorage.setItem(storage('camera-source'), sourceSelect.value);
     loadProfile();
-    panel.classList.toggle('show', remote);
     els.cameraSelect.disabled = remote;
+    els.cameraSelect.hidden = remote;
+    els.refreshDevices.hidden = remote;
     els.refreshDevices.disabled = false;
     els.startCamera.textContent = remote ? `连接 ${profile().name}` : '连接摄像头';
-    if (remote) checkBridge(); else setFocusPill('自动对焦 · 待检测', 'neutral');
+    setFocusPill(remote ? `${profile().name} · 待连接` : '自动对焦 · 待检测', 'neutral');
   });
 
   els.startCamera.addEventListener('click', async e => {
     e.preventDefault(); e.stopImmediatePropagation();
-    if (profile()) await startNetworkCamera(); else await startUvc();
+    if (profile()) connectionDialog.open(); else await startUvc();
   }, true);
 
   disconnectBtn.addEventListener('click', e => {
@@ -378,11 +380,9 @@
 
   window.addEventListener('pagehide', stopRemote);
 
-  if (secondary) {
-    sourceSelect.value = localStorage.getItem(storage('camera-source')) || 'tapo';
-    if (!sourceSelect.value) sourceSelect.value = 'tapo';
-    sourceSelect.dispatchEvent(new Event('change'));
-  }
+  sourceSelect.value = localStorage.getItem(storage('camera-source')) || 'uvc';
+  if (!sourceSelect.value) sourceSelect.value = 'uvc';
+  sourceSelect.dispatchEvent(new Event('change'));
   return {
     enableAutofocus, stopRemote, disconnectCamera, checkBridge, sourceSelect,
     get source(){ return sourceSelect.value; },
