@@ -95,7 +95,7 @@
   };
 
   const analyzeCurrentFrame = async (text) => {
-    if (!state?.stream || !els?.video?.videoWidth) return null;
+    if (!window.LabSightDualCamera && (!state?.stream || !els?.video?.videoWidth)) return null;
     const image = captureFrame();
     if (!image) return null;
 
@@ -109,6 +109,7 @@
         image_data_url:image,
         project_context:state.projectContext,
         conversation:state.conversation.slice(-8),
+        ...window.LabSightDualCamera?.requestFields(),
       };
       const r = await fetch('/api/analyze', {
         method:'POST',
