@@ -99,5 +99,34 @@ class BridgeTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(response.status,200)
             self.assertEqual((await task).status,502)
 
+    async def test_two_cameras_disconnect_independently(self):
+        second = RTCPeerConnection(RTCConfiguration(iceServers=[]))
+        self.addAsyncCleanup(second.close)
+        players = [FakePlayer(), FakePlayer()]
+        received = []
+        for client_pc, player in zip([self.pc, second], players):
+            track_ready = asyncio.Future()
+            @client_pc.on('track')
+            def on_track(track, future=track_ready):
+                if not future.done(): future.set_result(track)
+            client_pc.addTransceiver('video', direction='recvonly')
+            await client_pc.setLocalDescription(await client_pc.createOffer())
+            with patch.object(bridge, 'open_player', return_value=player):
+                response = await self.client.post('/offer', json=dict(
+                    sdp=client_pc.localDescription.sdp, type='offer',
+                    camera_ip='192.168.1.100', username='camera', password='test', rtsp_path='/stream1'))
+            self.assertEqual(response.status, 200)
+            await client_pc.setRemoteDescription(RTCSessionDescription(**await response.json()))
+            received.append(await asyncio.wait_for(track_ready, 5))
+        frames = await asyncio.wait_for(asyncio.gather(*(t.recv() for t in received)), 8)
+        self.assertTrue(all(frame.width == 640 for frame in frames))
+        self.assertEqual(len(bridge.pcs), 2)
+        first_server = next(pc for pc, player in bridge.players.items() if player is players[0])
+        await bridge.close_peer(first_server)
+        self.assertEqual(players[0].video.readyState, 'ended')
+        self.assertEqual(players[1].video.readyState, 'live')
+        self.assertEqual((await asyncio.wait_for(received[1].recv(), 5)).width, 640)
+        self.assertEqual(len(bridge.pcs), 1)
+
 
 if __name__ == '__main__': unittest.main()
