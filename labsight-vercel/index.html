@@ -16,6 +16,7 @@
   <link rel="stylesheet" href="/capturebar-layout.css?v=0.1.0" />
   <link rel="stylesheet" href="/pcb-project-viewer-v2.css?v=0.2.0" />
   <link rel="stylesheet" href="/debug-session.css?v=0.17.0" />
+<link rel="stylesheet" href="/dual-camera.css?v=0.2.0">
 </head>
 <body>
 <header class="topbar">
@@ -37,7 +38,7 @@
     <div class="panelhead">
       <div>
         <h2>实时视觉</h2>
-        <p>连接摄像头后自动识别 PCB、示波器或其它测试仪器，并自动切换相应分析能力。支持 Insta360 Link 系列 UVC、IMX415 8MP UVC 变焦摄像头与 Seeed reCamera Pro WebRTC。</p>
+        <p>分别选择用于 PCB 和仪器的摄像头；两侧均支持 USB、Tapo C113 和 reCamera。可分别分析或联合提问，网络摄像头参数在连接时填写。</p>
       </div>
       <div class="scene-tabs" role="tablist" aria-hidden="true">
         <button class="scene active" data-scene="pcb">PCB</button>
@@ -140,7 +141,7 @@
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/agora-rtc-sdk-ng@4.24.7/AgoraRTC_N-production.js"></script>
 <script src="/session-auth.js?v=0.2.0"></script>
-<script src="/app.js?v=0.5.7"></script>
+<script src="/app.js?v=0.5.8"></script>
 <script src="/wake-local-vad.js?v=0.1.0"></script>
 <script src="/markdown-ui.js?v=0.5.3"></script>
 <script src="/deepvision-ui.js?v=0.5.5"></script>
@@ -148,18 +149,20 @@
 <script src="/audio-output.js?v=0.1.2"></script>
 <script src="/voice-upgrade.js?v=0.5.6"></script>
 <script src="/realtime-voice.js?v=0.6.2"></script>
-<script src="/camera-adapters.js?v=0.10.0"></script>
-<script src="/imx415-uvc-profile.js?v=0.1.0"></script>
+<script src="/camera-connection-dialog.js?v=0.1.0"></script>
+<script src="/camera-adapters.js?v=0.13.0"></script>
+<script src="/imx415-uvc-profile.js?v=0.2.0"></script>
 <script src="/auto-scene.js?v=0.2.0"></script>
 <script src="/shengwang-voice-adapter.js?v=0.21.0"></script>
-<script src="/shengwang-browser-asr-fallback.js?v=0.1.4"></script>
-<script src="/assembly-inspection.js?v=0.8.4"></script>
+<script src="/shengwang-browser-asr-fallback.js?v=0.1.5"></script>
+<script src="/assembly-inspection.js?v=0.8.5"></script>
 <script src="/pcb-project-viewer-v2.js?v=0.2.1"></script>
 <script src="/pcb-project-viewer-side-helper.js?v=0.1.0"></script>
 <script src="/footprint-overlay.js?v=0.2.0"></script>
 <script src="/footprint-overlay-adjust.js?v=0.2.0"></script>
 <script src="/footprint-overlay-pro.js?v=0.3.0"></script>
 <script src="/capturebar-layout.js?v=0.1.0"></script>
-<script src="/debug-session.js?v=0.17.0"></script>
+<script src="/debug-session.js?v=0.17.1"></script>
+<script src="/dual-camera.js?v=0.2.0"></script>
 </body>
 </html>

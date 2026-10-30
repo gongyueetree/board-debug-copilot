@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Any
+from typing import Any, Literal
+from datetime import datetime
 
 import requests
 from fastapi import FastAPI, HTTPException, Request
@@ -10,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from api._security import rate_limit, require_session
 
-app = FastAPI(title="LabSight Analyze", version="0.5.4")
+app = FastAPI(title="LabSight Analyze", version="0.6.0")
 
 MAX_CONTEXT_CHARS = 50_000
 MAX_IMAGE_DATA_URL_CHARS = 3_200_000
@@ -36,11 +37,18 @@ class ProjectContext(BaseModel):
     raw_context: str = ""
 
 
+class CameraFrame(BaseModel):
+    role: Literal["pcb", "instrument"]
+    captured_at: datetime | None = None
+    image_data_url: str = Field(max_length=MAX_IMAGE_DATA_URL_CHARS)
+
+
 class AnalyzeRequest(BaseModel):
     question: str = "请分析当前画面并给出下一步调试建议。"
     scene: str = "pcb"
     provider: str = "openai"
-    image_data_url: str
+    image_data_url: str = Field(max_length=MAX_IMAGE_DATA_URL_CHARS)
+    camera_frames: list[CameraFrame] = Field(default_factory=list, max_length=2)
     project_context: ProjectContext | None = None
     conversation: list[dict[str, str]] = Field(default_factory=list)
 
@@ -50,6 +58,23 @@ def _split_data_url(data_url: str) -> tuple[str, str]:
     if not m:
         raise HTTPException(status_code=400, detail="无效的 data URL")
     return m.group(1), m.group(2)
+
+
+def _image_items(req: AnalyzeRequest) -> list[tuple[str, str]]:
+    if req.camera_frames:
+        roles = [frame.role for frame in req.camera_frames]
+        if len(set(roles)) != len(roles):
+            raise HTTPException(status_code=400, detail="每个摄像头角色只能提交一张图")
+        items = [(f"来源：{'PCB 摄像头' if f.role == 'pcb' else '仪器摄像头'}；浏览器截图时间：{f.captured_at.isoformat() if f.captured_at else '未提供'}", f.image_data_url) for f in req.camera_frames]
+    else:
+        items = [("来源：当前摄像头", req.image_data_url)]
+    if sum(len(data) for _, data in items) > MAX_IMAGE_DATA_URL_CHARS:
+        raise HTTPException(status_code=413, detail="截图总量过大，请降低 JPEG 质量或缩小分析帧。")
+    for _, data in items:
+        mime, _ = _split_data_url(data)
+        if mime not in {"image/jpeg", "image/png", "image/webp"}:
+            raise HTTPException(status_code=400, detail="截图必须为 JPEG、PNG 或 WebP data URL")
+    return items
 
 
 def _project_text(project: ProjectContext | None) -> str:
@@ -84,6 +109,10 @@ def _question_intent(question: str) -> str:
 
 def _scene_instruction(scene: str, question: str) -> str:
     intent = _question_intent(question)
+    if scene == "dual":
+        return ("你收到两张分别标注来源的截图：PCB 和仪器。先回答用户问题，明确区分板上丝印与仪器显示读数，"
+                "结合 KiCad 给出可验证的关联与下一步测量。不能仅因同时拍摄就认定仪器探头连接了某个网络或测试点；"
+                "两路是浏览器近同时截图，并非硬件同步采样，不得据此计算跨摄像头精确时序。")
     if intent == "identity":
         if scene in {"scope", "instrument"}:
             return (
@@ -130,6 +159,8 @@ def _answer_structure(scene: str, question: str) -> str:
         )
     if intent == "specific":
         return "直接回答用户问题。结论优先，必要时给 1~3 条证据或下一步；不要套用固定章节，也不要回答没问的内容。"
+    if scene == "dual":
+        return "先回答当前问题，再分别列出 PCB 可见证据、仪器读数与单位、可确认的关联及下一步测量。缺少探头接线信息时明确询问，不推断未见连接。"
     if scene == "scope":
         return (
             "请按以下结构，直接给测量结论：\n"
@@ -151,10 +182,11 @@ def _user_text(req: AnalyzeRequest) -> str:
     history = "\n".join(
         f"{m.get('role', 'user')}: {m.get('content', '')[:1000]}" for m in req.conversation[-8:]
     )
+    scene = "dual" if len(req.camera_frames) == 2 else "instrument" if req.camera_frames and req.camera_frames[0].role == "instrument" else req.scene
     return f"""
 用户刚刚的问题（最高优先级）：{req.question}
 
-场景辅助要求：{_scene_instruction(req.scene, req.question)}
+场景辅助要求：{_scene_instruction(scene, req.question)}
 
 KiCad 工程上下文：
 {_project_text(req.project_context)}
@@ -162,7 +194,7 @@ KiCad 工程上下文：
 最近对话：
 {history or '无'}
 
-回答要求：{_answer_structure(req.scene, req.question)}
+回答要求：{_answer_structure(scene, req.question)}
 """.strip()
 
 
@@ -171,13 +203,13 @@ def _call_gemini(req: AnalyzeRequest) -> tuple[str, str, str | None]:
     if not key:
         raise HTTPException(status_code=503, detail="未配置 GEMINI_API_KEY")
     model = os.getenv("GEMINI_VISION_MODEL", "gemini-2.5-flash")
-    mime, b64 = _split_data_url(req.image_data_url)
+    parts = [{"text": _user_text(req)}]
+    for label, data_url in _image_items(req):
+        mime, b64 = _split_data_url(data_url)
+        parts.extend([{"text": label}, {"inlineData": {"mimeType": mime, "data": b64}}])
     payload = {
         "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
-        "contents": [{"role": "user", "parts": [
-            {"text": _user_text(req)},
-            {"inlineData": {"mimeType": mime, "data": b64}},
-        ]}],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.15, "thinkingConfig": {"thinkingBudget": 0}},
     }
     try:
@@ -206,13 +238,13 @@ def _call_openai(req: AnalyzeRequest) -> tuple[str, str, str | None]:
     if not key:
         raise HTTPException(status_code=503, detail="未配置 OPENAI_API_KEY")
     model = os.getenv("OPENAI_VISION_MODEL", "gpt-5.6-luna")
+    content = [{"type": "input_text", "text": _user_text(req)}]
+    for label, data_url in _image_items(req):
+        content.extend([{"type": "input_text", "text": label}, {"type": "input_image", "image_url": data_url, "detail": "high"}])
     payload = {
         "model": model,
         "instructions": SYSTEM_PROMPT,
-        "input": [{"role": "user", "content": [
-            {"type": "input_text", "text": _user_text(req)},
-            {"type": "input_image", "image_url": req.image_data_url, "detail": "high"},
-        ]}],
+        "input": [{"role": "user", "content": content}],
         "max_output_tokens": 4096,
     }
     try:
@@ -238,10 +270,7 @@ def _call_openai(req: AnalyzeRequest) -> tuple[str, str, str | None]:
 def analyze(req: AnalyzeRequest, request: Request):
     require_session(request)
     rate_limit(request, "analyze", limit=90, window=300.0)
-    if not req.image_data_url.startswith("data:image/"):
-        raise HTTPException(status_code=400, detail="image_data_url 必须是浏览器截图 data URL")
-    if len(req.image_data_url) > MAX_IMAGE_DATA_URL_CHARS:
-        raise HTTPException(status_code=413, detail="截图过大，请降低 JPEG 质量或缩小分析帧。")
+    _image_items(req)
 
     provider = req.provider.lower().strip()
     if provider == "gemini":
@@ -251,4 +280,4 @@ def analyze(req: AnalyzeRequest, request: Request):
     else:
         raise HTTPException(status_code=400, detail="provider 仅支持 openai 或 gemini")
 
-    return {"answer": answer, "provider": provider, "model": model, "finish_reason": finish_reason, "demo": False}
+    return {"answer": answer, "provider": provider, "model": model, "finish_reason": finish_reason, "demo": False, "camera_roles": [f.role for f in req.camera_frames]}

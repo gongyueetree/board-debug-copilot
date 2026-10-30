@@ -60,6 +60,10 @@ GEMINI_AUDIO_MODEL=gemini-2.5-flash
 - 延迟
 - 成本
 
+## Tapo C113（Wi-Fi）
+
+支持同时连接 PCB 和仪器两路摄像头：两侧均可选择 USB/UVC、IMX415、Tapo C113 或 reCamera，由用户按用途分配设备；网络摄像头配置在点击连接后弹出。可选择单路或双路提问，两张分析帧分别标明来源，共用 KiCad 上下文；PCB 对齐与 Deep Vision 固定使用第一路。Tapo 复用本机 RTSP → WebRTC Bridge，默认 `/stream1`，可切换 `/stream2`。详细配置、Mac 启动命令和故障排查见 [TAPO_C113.md](TAPO_C113.md)。需要在 Tapo App 创建专用摄像机账户。
+
 ## reCamera Pro 本地 Bridge
 
 浏览器不能直接读取 RTSP。选择 `Seeed reCamera Pro（Wi‑Fi）` 后，页面通过仅监听本机的 RTSP→WebRTC Bridge 获取视频。

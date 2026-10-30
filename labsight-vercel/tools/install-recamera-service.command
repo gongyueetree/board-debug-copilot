@@ -2,22 +2,14 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV_DIR="$HOME/.labsight/recamera-webrtc-venv"
 LOG_DIR="$HOME/Library/Logs/LabSight"
 PLIST="$HOME/Library/LaunchAgents/cn.eetree.labsight.recamera.plist"
 LABEL="cn.eetree.labsight.recamera"
-PY="$VENV_DIR/bin/python"
 
 mkdir -p "$HOME/.labsight" "$LOG_DIR" "$HOME/Library/LaunchAgents"
 
-if [[ ! -x "$PY" ]]; then
-  echo "[LabSight] 创建 Python 环境…"
-  python3 -m venv "$VENV_DIR"
-fi
-
-echo "[LabSight] 安装/更新 reCamera WebRTC 依赖…"
-"$VENV_DIR/bin/pip" install --upgrade pip >/dev/null
-"$VENV_DIR/bin/pip" install -r "$SCRIPT_DIR/requirements-recamera-bridge.txt"
+source "$SCRIPT_DIR/camera-python-env.sh"
+labsight_setup_python "$HOME/.labsight/recamera-webrtc" "$SCRIPT_DIR/requirements-recamera-bridge.txt"
 
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
