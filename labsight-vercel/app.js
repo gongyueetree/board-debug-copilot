@@ -62,6 +62,7 @@ function updateSceneUI() {
         ? 'Instrument ROI · 把仪器屏幕与关键读数放在框内'
         : 'Deep Vision ROI · 把整块 PCB 放在框内';
   }
+  window.LabSightDualCamera?.updateUI();
 }
 
 async function readJsonResponse(r) {
@@ -134,6 +135,7 @@ function cropCanvas(source,x,y,w,h){
   c.getContext('2d',{alpha:false}).drawImage(source,Math.round(x),Math.round(y),Math.round(w),Math.round(h),0,0,c.width,c.height);return c;
 }
 function captureFrame() {
+  if (window.LabSightDualCamera) return window.LabSightDualCamera.capture();
   const native=getNativeFrameCanvas(); if(!native){alert('请先连接摄像头。');return null;}
   const out=canvasScaledDataURL(native,2048,.86); state.lastCapture=out.data;
   els.capturePreview.src=out.data;els.capturePreview.style.display='block';
@@ -212,7 +214,7 @@ async function askAI(questionOverride=null) {
   const thinkingText = state.scene==='scope' ? '正在读取当前示波器信号…' : state.scene==='instrument' ? '正在读取当前仪器画面…' : '正在读取当前画面…';
   const thinking=addMessage('assistant',`正在用 ${state.provider==='gemini'?'Gemini':'OpenAI'} ${thinkingText.replace('正在','')}`,'thinking');els.sendBtn.disabled=els.analyzeBtn.disabled=true;
   try{
-    const payload={question:q,scene:state.scene,provider:state.provider,image_data_url:image,project_context:state.projectContext,conversation:state.conversation.slice(-8)};
+    const payload={question:q,scene:state.scene,provider:state.provider,image_data_url:image,project_context:state.projectContext,conversation:state.conversation.slice(-8),...window.LabSightDualCamera?.requestFields()};
     const r=await fetch('/api/analyze',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await readJsonResponse(r);
     thinking.remove();addMessage('assistant',`[${d.provider.toUpperCase()} · ${d.model}]\n${d.answer}`);state.conversation.push({role:'user',content:q},{role:'assistant',content:d.answer});
     if(state.conversation.length>20)state.conversation=state.conversation.slice(-20);extendSession();if(els.autoSpeak.checked)await speakAnswer(d.answer);
